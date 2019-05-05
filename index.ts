@@ -5,43 +5,83 @@ import {partitionBy} from './utils';
  * Each element of `C`-long `clozes` is a string array of at least one string that is acceptable for that blank.
  * Example:
  * `{contexts: ['hello ', null, null], clozes: [['world', 'everyone', 'down there'], ['!']]}`
+ * If available, `hints` should be as long as `clozes` (`C`).
  */
 type Cloze = {
   contexts: (string|null)[],
-  clozes: string[][]
+  clozes: string[][],
+  hints?: string[],
 };
 
 type Card = {
   prompt: string,
   responses: string[],
+  pos?: string[],
   fills?: Cloze[],
   flashs?: Card[],
 };
 
+function separateAtSeparateds(s: string, n: number = 0) {
+  if (n) { s = s.slice(n); }
+  const adverbMatch = s.match(/\s@\S/);
+  const adverbIndex = adverbMatch ? adverbMatch.index : s.length;
+  const atSeparatedValues = s.slice(0, adverbIndex).split('@').map(s => s.trim());
+  const adverbsStrings = adverbMatch ? s.slice(adverbIndex).trim().split('@').filter(s => s).map(s => '@' + s) : [];
+  let adverbs: {[name: string]: string} = Object.assign({}, ...adverbsStrings.map(s => {
+    const thisMatch = s.match(/@\S+/);
+    let ret: {[name: string]: string} = {};
+    if (thisMatch) { ret[thisMatch[0]] = s.slice(thisMatch[0].length).trim(); }
+    return ret;
+  }));
+  return {atSeparatedValues, adverbs};
+}
 export function blockToCard(block: string[]) {
   const atRe = /^#+\s+@\s+/;
-  const dropAndSplit = (s: string, n: number) => s.slice(n).split('@').map(s => s.trim());
   const match = block[0].match(atRe);
   if (match) {
-    const items = dropAndSplit(block[0], match[0].length);
+    const {atSeparatedValues: items, adverbs} = separateAtSeparateds(block[0], match[0].length);
     const [prompt, ...responses] = items;
     let card: Card = {prompt, responses, fills: [], flashs: []};
     for (let line of block.slice(1)) {
-      const fillRe = /^- @fill /;
-      const flashRe = /^- @flash /;
+      const fillRe = /^-\s+@fill\s+/;
+      const flashRe = /^-\s+@\s+/;
       let match = line.match(fillRe);
       if (match) {
-        const fills = dropAndSplit(line, match[0].length);
+        const {atSeparatedValues: fills, adverbs: fillAdverbs} = separateAtSeparateds(line, match[0].length);
         const cloze = parseCloze(prompt, fills[0]);
         // add other valid entries
         cloze.clozes[0].push(...fills.slice(1));
         (card.fills || []).push(cloze); // TypeScript pacification
       } else if (match = line.match(flashRe)) {
-        const items2 = dropAndSplit(line, match[0].length);
+        const {atSeparatedValues: items2, adverbs: flashAdverbs} = separateAtSeparateds(line, match[0].length);
         const [prompt2, ...responses2] = items2;
-        (card.flashs || []).push({prompt: prompt2, responses: responses2}); // TypeScript pacification
+        let flash: Card = {prompt: prompt2, responses: responses2};
+        if ('@pos' in flashAdverbs) { flash.pos = flashAdverbs['@pos'].split('-'); }
+
+        // Is the header card is repeated in this bullet? Skip it. A part of speech might be present though
+        if (flash.prompt === prompt && responses2.length === responses.length &&
+            responses2.join('') === responses.join('')) {
+          if (flash.pos && !card.pos) { card.pos = flash.pos; }
+          continue;
+        }
+
+        // Can I make fill-in-the-blank quizzes out of this flashcard?
+        if ('@omit' in flashAdverbs) {
+          let cloze = parseCloze(prompt, flashAdverbs['@omit']);
+          if (prompt.includes(cloze.clozes[0][0])) { cloze.hints = [prompt2]; }
+          cloze.clozes[0] = responses2.concat(prompt2);
+          flash.fills = [cloze];
+        } else if (prompt.includes(prompt2)) {
+          let cloze = parseCloze(prompt, prompt2);
+          cloze.clozes[0].push(...responses2);
+          cloze.hints = [prompt2];
+          flash.fills = [cloze];
+        }
+        (card.flashs || []).push(flash); // TypeScript pacification
+      } else if (line.match(/^\s*-\s+@/)) {
+        // Sub-at-bullets and unrecognized at-bullets
       } else {
-        // stop looking for @fill/@flash after initial bulleted list
+        // stop looking for @fill/@flash after initial @-bulleted list
         break;
       }
     }
