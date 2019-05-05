@@ -9,6 +9,17 @@ test('does not do anything for non-headers', t => {
   t.end();
 });
 
+test('multiple responses ok', t => {
+  let s = `# @ 私 @ わたし @ わたくし @ あたし`;
+  const card = curtiz.blockToCard([s]);
+  t.ok(card);
+  // console.log(JSON.stringify(card, null, 1));
+  t.equal(card.flashs.length, 0);
+  t.equal(card.fills.length, 0);
+  t.equal(card.responses.length, 3);
+  t.end();
+});
+
 test('does actually do something with headers', t => {
   let s = `## @ 千と千尋の神隠し @ せんとちひろのかみがくし
 - @fill と
@@ -40,7 +51,13 @@ test('does actually do something with headers', t => {
   t.equal(cards[0].flashs.length, 3);
   t.equal(cards[1].flashs.length, 4);
 
-  console.log(JSON.stringify(cards, null, 1));
+  t.ok(cards[2].fills ? cards[2].fills.length === 0 : !cards[2].fills);
+  t.ok(cards[2].flashs ? cards[2].flashs.length === 0 : !cards[2].flashs);
+  t.ok(cards[2].pos);
+
+  t.ok(cards.every(card => card.flashs.every(flash => flash.fills && flash.fills.length > 0)));
+
+  // console.log(JSON.stringify(cards, null, 1));
 
   t.end();
 })
