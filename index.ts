@@ -7,13 +7,13 @@ import {partitionBy} from './utils';
  * `{contexts: ['hello ', null, null], clozes: [['world', 'everyone', 'down there'], ['!']]}`
  * If available, `hints` should be as long as `clozes` (`C`).
  */
-type Cloze = {
+export type Cloze = {
   contexts: (string|null)[],
   clozes: string[][],
   hints?: string[],
 };
 
-type Card = {
+export type Card = {
   prompt: string,
   responses: string[],
   pos?: string[],
