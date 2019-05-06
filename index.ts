@@ -8,11 +8,17 @@ import {partitionBy} from './utils';
  * If available, `hints` should be as long as `clozes` (`C`).
  */
 export interface Cloze {
-  contexts: (string|null)[], clozes: string[][], hints?: string[],
+  contexts: (string|null)[];
+  clozes: string[][];
+  hints?: string[];
 }
 
 export interface Card {
-  prompt: string, responses: string[], pos?: string[], fills?: Cloze[], flashs?: Card[],
+  prompt: string;
+  responses: string[];
+  pos?: string[];
+  fills?: Cloze[];
+  flashs?: Card[];
 }
 
 function separateAtSeparateds(s: string, n: number = 0) {
