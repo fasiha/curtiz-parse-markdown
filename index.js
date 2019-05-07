@@ -5,7 +5,7 @@ function separateAtSeparateds(s, n = 0) {
     if (n) {
         s = s.slice(n);
     }
-    const adverbMatch = s.match(/\s@\S/);
+    const adverbMatch = s.match(/(^|\s)@\S/);
     const adverbIndex = adverbMatch ? adverbMatch.index : s.length;
     const atSeparatedValues = s.slice(0, adverbIndex).split('@').map(s => s.trim());
     const adverbsStrings = adverbMatch ? s.slice(adverbIndex).trim().split('@').filter(s => s).map(s => '@' + s) : [];
@@ -26,15 +26,36 @@ function blockToCard(block) {
         const { atSeparatedValues: items, adverbs } = separateAtSeparateds(block[0], match[0].length);
         const [prompt, ...responses] = items;
         let card = { prompt, responses, fills: [], flashs: [] };
+        let translation = undefined;
+        const translationRe = /^-\s+@translation\s+/;
+        const fillRe = /^-\s+@fill\s+/;
+        const flashRe = /^-\s+@\s+/;
         for (let line of block.slice(1)) {
-            const fillRe = /^-\s+@fill\s+/;
-            const flashRe = /^-\s+@\s+/;
-            let match = line.match(fillRe);
-            if (match) {
+            let match = line.match(/./);
+            if (match = line.match(translationRe)) {
+                const { atSeparatedValues: _, adverbs: translationAdverbs } = separateAtSeparateds(line, match[0].length);
+                translation = {};
+                for (let [k, v] of Object.entries(translationAdverbs)) {
+                    translation[k.replace(/^@/, '')] = v;
+                }
+                card.translation = translation;
+                for (let fill of (card.fills || [])) {
+                    fill.translation = translation;
+                }
+                for (let flash of (card.flashs || [])) {
+                    for (let fill of (flash.fills || [])) {
+                        fill.translation = translation;
+                    }
+                }
+            }
+            else if (match = line.match(fillRe)) {
                 const { atSeparatedValues: fills, adverbs: fillAdverbs } = separateAtSeparateds(line, match[0].length);
                 const cloze = parseCloze(prompt, fills[0]);
                 // add other valid entries
                 cloze.clozes[0].push(...fills.slice(1));
+                if (translation) {
+                    cloze.translation = translation;
+                }
                 (card.fills || []).push(cloze); // TypeScript pacification
             }
             else if (match = line.match(flashRe)) {
@@ -59,12 +80,18 @@ function blockToCard(block) {
                         cloze.hints = [prompt2];
                     }
                     cloze.clozes[0] = responses2.concat(prompt2);
+                    if (translation) {
+                        cloze.translation = translation;
+                    }
                     flash.fills = [cloze];
                 }
                 else if (prompt.includes(prompt2)) {
                     let cloze = parseCloze(prompt, prompt2);
                     cloze.clozes[0].push(...responses2);
                     cloze.hints = [prompt2];
+                    if (translation) {
+                        cloze.translation = translation;
+                    }
                     flash.fills = [cloze];
                 }
                 (card.flashs || []).push(flash); // TypeScript pacification
