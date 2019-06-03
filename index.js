@@ -1,7 +1,28 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-const utils_1 = require("./utils");
-function separateAtSeparateds(s, n = 0) {
+const curtiz_utils_1 = require("curtiz-utils");
+function addIdToCloze(cloze) {
+    cloze.uniqueId = JSON.stringify({ contexts: cloze.contexts, clozes: cloze.clozes });
+    return cloze;
+}
+function emptyGraph() { return { edges: new Map(), nodes: new Map() }; }
+function addNode(graph, node, id) {
+    if (!graph.nodes.has(id)) {
+        graph.nodes.set(id, node);
+    }
+}
+function addEdge(graph, parent, parentId, child, childId) {
+    addNode(graph, parent, parentId);
+    addNode(graph, child, childId);
+    let set = graph.edges.get(parentId);
+    if (set) {
+        set.add(childId);
+    }
+    else {
+        graph.edges.set(parentId, new Set([childId]));
+    }
+}
+function _separateAtSeparateds(s, n = 0) {
     if (n) {
         s = s.slice(n);
     }
@@ -19,49 +40,62 @@ function separateAtSeparateds(s, n = 0) {
     }));
     return { atSeparatedValues, adverbs };
 }
-function blockToCard(block) {
+exports._separateAtSeparateds = _separateAtSeparateds;
+function makeCard(prompt, responses) {
+    return { prompt, responses, uniqueId: JSON.stringify({ prompt, responses }) };
+}
+exports.makeCard = makeCard;
+function updateGraphWithBlock(graph, block) {
     const atRe = /^#+\s+@\s+/;
     const match = block[0].match(atRe);
     if (match) {
-        const { atSeparatedValues: items, adverbs } = separateAtSeparateds(block[0], match[0].length);
-        const [prompt, ...responses] = items;
-        let card = { prompt, responses, fills: [], flashs: [] };
-        let translation = undefined;
         const translationRe = /^-\s+@translation\s+/;
         const fillRe = /^-\s+@fill\s+/;
         const flashRe = /^-\s+@\s+/;
+        const { atSeparatedValues: items, adverbs } = _separateAtSeparateds(block[0], match[0].length);
+        const [prompt, ...responses] = items;
+        let card = makeCard(prompt, responses);
+        let allFills = [];
+        let allFlashes = [];
+        let allFlashfillsPromptKanji = [];
+        let allFlashfillsPromptReading = [];
+        let translation = undefined;
+        for (const key of Object.keys(adverbs)) {
+            if (key.startsWith('@t-')) {
+                translation = translation || {};
+                translation[key.slice(3)] = adverbs[key];
+            }
+        }
         for (let line of block.slice(1)) {
-            let match = line.match(/./);
+            let match;
             if (match = line.match(translationRe)) {
-                const { atSeparatedValues: _, adverbs: translationAdverbs } = separateAtSeparateds(line, match[0].length);
-                translation = {};
+                //
+                // Extract translation
+                //
+                const { atSeparatedValues: _, adverbs: translationAdverbs } = _separateAtSeparateds(line, match[0].length);
+                translation = translation || {};
                 for (let [k, v] of Object.entries(translationAdverbs)) {
                     translation[k.replace(/^@/, '')] = v;
                 }
                 card.translation = translation;
-                for (let fill of (card.fills || [])) {
-                    fill.translation = translation;
-                }
-                for (let flash of (card.flashs || [])) {
-                    for (let fill of (flash.fills || [])) {
-                        fill.translation = translation;
-                    }
-                }
             }
             else if (match = line.match(fillRe)) {
-                const { atSeparatedValues: fills, adverbs: fillAdverbs } = separateAtSeparateds(line, match[0].length);
+                //
+                // Extract fill in the blank: either particle or conjugated phrase
+                //
+                const { atSeparatedValues: fills, adverbs: fillAdverbs } = _separateAtSeparateds(line, match[0].length);
                 const cloze = parseCloze(prompt, fills[0]);
                 // add other valid entries
                 cloze.clozes[0].push(...fills.slice(1));
-                if (translation) {
-                    cloze.translation = translation;
-                }
-                (card.fills || []).push(cloze); // TypeScript pacification
+                allFills.push(addIdToCloze(cloze));
             }
             else if (match = line.match(flashRe)) {
-                const { atSeparatedValues: items2, adverbs: flashAdverbs } = separateAtSeparateds(line, match[0].length);
+                //
+                // Extract flashcard
+                //
+                const { atSeparatedValues: items2, adverbs: flashAdverbs } = _separateAtSeparateds(line, match[0].length);
                 const [prompt2, ...responses2] = items2;
-                let flash = { prompt: prompt2, responses: responses2 };
+                let flash = makeCard(prompt2, responses2);
                 if ('@pos' in flashAdverbs) {
                     flash.pos = flashAdverbs['@pos'].split('-');
                 }
@@ -73,28 +107,23 @@ function blockToCard(block) {
                     }
                     continue;
                 }
+                allFlashes.push(flash);
                 // Can I make fill-in-the-blank quizzes out of this flashcard?
-                if ('@omit' in flashAdverbs) {
-                    let cloze = parseCloze(prompt, flashAdverbs['@omit']);
-                    if (prompt.includes(cloze.clozes[0][0])) {
-                        cloze.hints = [prompt2];
+                if ('@omit' in flashAdverbs || prompt.includes(prompt2)) {
+                    const blank = flashAdverbs['@omit'] || prompt2;
+                    { // first, make the blank's prompt be prompt2 and the acceptable answers be either prompt2 or responses2
+                        let cloze = parseCloze(prompt, blank);
+                        cloze.clozes = [responses2.concat(prompt2)];
+                        cloze.prompts = [prompt2];
+                        allFlashfillsPromptReading.push(addIdToCloze(cloze));
                     }
-                    cloze.clozes[0] = responses2.concat(prompt2);
-                    if (translation) {
-                        cloze.translation = translation;
+                    { // next, make the blank prompt be responses2 and the acceptable answer only prompt2
+                        let cloze = parseCloze(prompt, blank);
+                        cloze.clozes = [[prompt2]];
+                        cloze.prompts = [responses2.join('||')];
+                        allFlashfillsPromptKanji.push(addIdToCloze(cloze));
                     }
-                    flash.fills = [cloze];
                 }
-                else if (prompt.includes(prompt2)) {
-                    let cloze = parseCloze(prompt, prompt2);
-                    cloze.clozes[0].push(...responses2);
-                    cloze.hints = [prompt2];
-                    if (translation) {
-                        cloze.translation = translation;
-                    }
-                    flash.fills = [cloze];
-                }
-                (card.flashs || []).push(flash); // TypeScript pacification
             }
             else if (line.match(/^\s*-\s+@/)) {
                 // Sub-at-bullets and unrecognized at-bullets
@@ -104,17 +133,46 @@ function blockToCard(block) {
                 break;
             }
         }
-        return card;
+        // update translation
+        if (translation) {
+            card.translation = translation;
+            for (const list of [allFills, allFlashfillsPromptKanji, allFlashfillsPromptReading]) {
+                for (const ent of list) {
+                    ent.translation = translation;
+                }
+            }
+        }
+        addNode(graph, card, card.uniqueId);
+        // Studying the card implies everything else was studied too: flashes, fills, and flash-fills
+        for (const children of [allFlashes, allFills, allFlashfillsPromptKanji, allFlashfillsPromptReading]) {
+            for (const child of children) {
+                addEdge(graph, card, card.uniqueId, child, child.uniqueId);
+            }
+        }
+        // Studying the flash or fill-flashes implies studying the other.
+        for (const [flash, clozeKanji, clozeKana] of curtiz_utils_1.zip(allFlashes, allFlashfillsPromptKanji, allFlashfillsPromptReading)) {
+            addEdge(graph, flash, flash.uniqueId, clozeKanji, clozeKanji.uniqueId);
+            addEdge(graph, flash, flash.uniqueId, clozeKana, clozeKana.uniqueId);
+            addEdge(graph, clozeKanji, clozeKanji.uniqueId, flash, flash.uniqueId);
+            addEdge(graph, clozeKana, clozeKana.uniqueId, flash, flash.uniqueId);
+        }
+        // Studying fills or fill-flashes implies studying the card
+        for (const fills of [allFills, allFlashfillsPromptKanji, allFlashfillsPromptReading]) {
+            for (const fill of fills) {
+                addEdge(graph, fill, fill.uniqueId, card, card.uniqueId);
+            }
+        }
     }
-    return undefined;
 }
-exports.blockToCard = blockToCard;
-function textToCards(text) {
+exports.updateGraphWithBlock = updateGraphWithBlock;
+function textToGraph(text, graph) {
+    graph = graph || emptyGraph();
     const re = /^#+\s+.+$/;
-    const headers = utils_1.partitionBy(text.split('\n'), s => re.test(s));
-    return headers.map(blockToCard).filter(x => !!x);
+    const headers = curtiz_utils_1.partitionBy(text.split('\n'), s => re.test(s));
+    headers.forEach(block => updateGraphWithBlock(graph, block));
+    return graph;
 }
-exports.textToCards = textToCards;
+exports.textToGraph = textToGraph;
 /**
  * Given a big string and a substring, which can be either
  * - a strict substring or
@@ -167,3 +225,9 @@ function parseCloze(haystack, needleMaybeContext) {
     }
     throw new Error('Cloze not found');
 }
+if (module === require.main) {
+    let s = `# @ 私 @ わたし @ わたくし @ あたし @t-en I @t-fr je @t-de Ich`;
+    let graph = textToGraph(s);
+    console.dir(graph, { depth: null });
+}
+//# sourceMappingURL=index.js.map
