@@ -5,7 +5,7 @@ function addIdToCloze(cloze) {
     cloze.uniqueId = JSON.stringify({ contexts: cloze.contexts, clozes: cloze.clozes });
     return cloze;
 }
-function emptyGraph() { return { edges: new Map(), nodes: new Map() }; }
+function emptyGraph() { return { edges: new Map(), nodes: new Map(), raws: new Map() }; }
 function addNode(graph, node, id) {
     if (!graph.nodes.has(id)) {
         graph.nodes.set(id, node);
@@ -20,6 +20,16 @@ function addEdge(graph, parent, parentId, child, childId) {
     }
     else {
         graph.edges.set(parentId, new Set([childId]));
+    }
+}
+function addNodeWithRaw(graph, raw, node) {
+    addNode(graph, node, node.uniqueId);
+    let nodes = graph.raws.get(raw);
+    if (nodes) {
+        nodes.add(node.uniqueId);
+    }
+    else {
+        graph.raws.set(raw, new Set([node.uniqueId]));
     }
 }
 function _separateAtSeparateds(s, n = 0) {
@@ -55,6 +65,7 @@ function updateGraphWithBlock(graph, block) {
         const { atSeparatedValues: items, adverbs } = _separateAtSeparateds(block[0], match[0].length);
         const [prompt, ...responses] = items;
         let card = makeCard(prompt, responses);
+        addNodeWithRaw(graph, block[0], card);
         let allFills = [];
         let allFlashes = [];
         let allFlashfillsPromptKanji = [];
@@ -87,7 +98,9 @@ function updateGraphWithBlock(graph, block) {
                 const cloze = parseCloze(prompt, fills[0]);
                 // add other valid entries
                 cloze.clozes[0].push(...fills.slice(1));
-                allFills.push(addIdToCloze(cloze));
+                const node = addIdToCloze(cloze);
+                allFills.push(node);
+                addNodeWithRaw(graph, block[0] + '\n' + line, node);
             }
             else if (match = line.match(flashRe)) {
                 //
@@ -108,6 +121,7 @@ function updateGraphWithBlock(graph, block) {
                     continue;
                 }
                 allFlashes.push(flash);
+                addNodeWithRaw(graph, block[0] + '\n' + line, flash);
                 // Can I make fill-in-the-blank quizzes out of this flashcard?
                 if ('@omit' in flashAdverbs || prompt.includes(prompt2)) {
                     const blank = flashAdverbs['@omit'] || prompt2;
@@ -115,13 +129,17 @@ function updateGraphWithBlock(graph, block) {
                         let cloze = parseCloze(prompt, blank);
                         cloze.clozes = [responses2.concat(prompt2)];
                         cloze.prompts = [prompt2];
-                        allFlashfillsPromptReading.push(addIdToCloze(cloze));
+                        const node = addIdToCloze(cloze);
+                        allFlashfillsPromptReading.push(node);
+                        addNodeWithRaw(graph, block[0] + '\n' + line, node);
                     }
                     { // next, make the blank prompt be responses2 and the acceptable answer only prompt2
                         let cloze = parseCloze(prompt, blank);
                         cloze.clozes = [[prompt2]];
                         cloze.prompts = [responses2.join('||')];
-                        allFlashfillsPromptKanji.push(addIdToCloze(cloze));
+                        const node = addIdToCloze(cloze);
+                        allFlashfillsPromptKanji.push(node);
+                        addNodeWithRaw(graph, block[0] + '\n' + line, node);
                     }
                 }
             }
@@ -142,7 +160,8 @@ function updateGraphWithBlock(graph, block) {
                 }
             }
         }
-        addNode(graph, card, card.uniqueId);
+        // All nodes should have been added, along with raws. Now build edges.
+        //
         // Studying the card implies everything else was studied too: flashes, fills, and flash-fills
         for (const children of [allFlashes, allFills, allFlashfillsPromptKanji, allFlashfillsPromptReading]) {
             for (const child of children) {

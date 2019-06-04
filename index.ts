@@ -30,11 +30,12 @@ export interface Card {
 
 export type Quiz = Cloze|Card;
 
-export interface Graph<T> {
+interface Graph<T> {
   edges: Map<string, Set<string>>;
   nodes: Map<string, T>;
 }
-function emptyGraph(): Graph<Quiz> { return {edges: new Map(), nodes: new Map()}; }
+export type QuizGraph = Graph<Quiz>&{raws: Map<string, Set<string>>};
+function emptyGraph(): QuizGraph { return {edges: new Map(), nodes: new Map(), raws: new Map()}; }
 function addNode<T>(graph: Graph<T>, node: T, id: string) {
   if (!graph.nodes.has(id)) { graph.nodes.set(id, node); }
 }
@@ -46,6 +47,15 @@ function addEdge<T>(graph: Graph<T>, parent: T, parentId: string, child: T, chil
     set.add(childId);
   } else {
     graph.edges.set(parentId, new Set([childId]));
+  }
+}
+function addNodeWithRaw(graph: QuizGraph, raw: string, node: Quiz) {
+  addNode(graph, node, node.uniqueId);
+  let nodes = graph.raws.get(raw);
+  if (nodes) {
+    nodes.add(node.uniqueId);
+  } else {
+    graph.raws.set(raw, new Set([node.uniqueId]));
   }
 }
 
@@ -66,7 +76,7 @@ export function _separateAtSeparateds(s: string, n: number = 0) {
 export function makeCard(prompt: string, responses: string[]): Card {
   return {prompt, responses, uniqueId: JSON.stringify({prompt, responses})};
 }
-export function updateGraphWithBlock(graph: Graph<Quiz>, block: string[]) {
+export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
   const atRe = /^#+\s+@\s+/;
   const match = block[0].match(atRe);
   if (match) {
@@ -77,6 +87,7 @@ export function updateGraphWithBlock(graph: Graph<Quiz>, block: string[]) {
     const {atSeparatedValues: items, adverbs} = _separateAtSeparateds(block[0], match[0].length);
     const [prompt, ...responses] = items;
     let card: Card = makeCard(prompt, responses);
+    addNodeWithRaw(graph, block[0], card);
 
     let allFills: Cloze[] = [];
     let allFlashes: Card[] = [];
@@ -108,7 +119,9 @@ export function updateGraphWithBlock(graph: Graph<Quiz>, block: string[]) {
         const cloze = parseCloze(prompt, fills[0]);
         // add other valid entries
         cloze.clozes[0].push(...fills.slice(1));
-        allFills.push(addIdToCloze(cloze));
+        const node = addIdToCloze(cloze);
+        allFills.push(node);
+        addNodeWithRaw(graph, block[0] + '\n' + line, node);
       } else if (match = line.match(flashRe)) {
         //
         // Extract flashcard
@@ -126,6 +139,7 @@ export function updateGraphWithBlock(graph: Graph<Quiz>, block: string[]) {
         }
 
         allFlashes.push(flash);
+        addNodeWithRaw(graph, block[0] + '\n' + line, flash);
 
         // Can I make fill-in-the-blank quizzes out of this flashcard?
         if ('@omit' in flashAdverbs || prompt.includes(prompt2)) {
@@ -134,13 +148,17 @@ export function updateGraphWithBlock(graph: Graph<Quiz>, block: string[]) {
             let cloze = parseCloze(prompt, blank);
             cloze.clozes = [responses2.concat(prompt2)];
             cloze.prompts = [prompt2];
-            allFlashfillsPromptReading.push(addIdToCloze(cloze));
+            const node = addIdToCloze(cloze);
+            allFlashfillsPromptReading.push(node);
+            addNodeWithRaw(graph, block[0] + '\n' + line, node);
           }
           { // next, make the blank prompt be responses2 and the acceptable answer only prompt2
             let cloze = parseCloze(prompt, blank);
             cloze.clozes = [[prompt2]];
             cloze.prompts = [responses2.join('||')];
-            allFlashfillsPromptKanji.push(addIdToCloze(cloze));
+            const node = addIdToCloze(cloze);
+            allFlashfillsPromptKanji.push(node);
+            addNodeWithRaw(graph, block[0] + '\n' + line, node);
           }
         }
       } else if (line.match(/^\s*-\s+@/)) {
@@ -159,8 +177,8 @@ export function updateGraphWithBlock(graph: Graph<Quiz>, block: string[]) {
       }
     }
 
-    addNode(graph, card, card.uniqueId);
-
+    // All nodes should have been added, along with raws. Now build edges.
+    //
     // Studying the card implies everything else was studied too: flashes, fills, and flash-fills
     for (const children of [allFlashes, allFills, allFlashfillsPromptKanji, allFlashfillsPromptReading]) {
       for (const child of children) { addEdge(graph, card, card.uniqueId, child, child.uniqueId); }
@@ -181,11 +199,11 @@ export function updateGraphWithBlock(graph: Graph<Quiz>, block: string[]) {
   }
 }
 
-export function textToGraph(text: string, graph?: Graph<Quiz>) {
+export function textToGraph(text: string, graph?: QuizGraph) {
   graph = graph || emptyGraph();
   const re = /^#+\s+.+$/;
   const headers = partitionBy(text.split('\n'), s => re.test(s));
-  headers.forEach(block => updateGraphWithBlock(graph as Graph<Quiz>, block));
+  headers.forEach(block => updateGraphWithBlock(graph as QuizGraph, block));
   return graph;
 }
 

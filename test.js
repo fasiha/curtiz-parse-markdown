@@ -122,3 +122,34 @@ test('third example', t => {
   t.ok(nodes[0].pos && nodes[0].pos.length === 4, 'pos exists');
   t.end();
 });
+
+test('two sentences share one flashcard', t => {
+  const s = `## @ 千と千尋の神隠し @ せんとちひろのかみがくし
+- @fill の
+- @ 千 @ せん    @pos noun-proper-name-firstname @omit [千]と
+- @ 千尋 @ ちひろ    @pos noun-proper-name-firstname
+## @ 千尋のお父さん @ ちひろのおちちさん
+- @fill の
+- @ 千尋 @ ちひろ    @pos noun-proper-name-firstname
+- @ 父 @ ちち    @pos noun-common-general
+`;
+  const graph = curtiz.textToGraph(s);
+  const nodes = [...graph.nodes.values()];
+  t.equal(nodes.length, 15, 'one fewer node than expected since one is shared');
+
+  const chihiroKeys =
+      '## @ 千と千尋の神隠し @ せんとちひろのかみがくし\n## @ 千尋のお父さん @ ちひろのおちちさん'.split('\n')
+          .map(head => head + '\n- @ 千尋 @ ちひろ    @pos noun-proper-name-firstname')
+          .map(raw => graph.raws.get(raw))
+          .filter(x => !!x);
+  t.equal(chihiroKeys.length, 2, 'found two sets of keys related to each raw');
+  const chihiroNodes = chihiroKeys.map(s => [...s.values()].filter(s => s.includes('prompt')))
+                           .map(v => v[0])
+                           .map(k => graph.nodes.get(k))
+                           .filter(x => !!x);
+  t.equal(chihiroNodes.length, 2, 'found two chihiro nodes');
+  t.ok(chihiroNodes.every(n => n.prompt && n.responses), 'both chihiro nodes are Clozes');
+  t.equal(chihiroNodes[0], chihiroNodes[1], 'both are the same object');
+
+  t.end();
+})
