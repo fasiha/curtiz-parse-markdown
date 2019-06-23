@@ -9,11 +9,13 @@ import {partitionBy, zip} from 'curtiz-utils';
  */
 export interface Cloze {
   uniqueId: string;
+  kind: ClozeKind;
   contexts: (string|null)[];
   clozes: string[][];
   prompts?: string[];
   translation?: {[lang: string]: string};
 }
+export type ClozeKind = 'cloze';
 type ClozeOptionalId = Omit<Cloze, 'uniqueId'>&{uniqueId?: string};
 function addIdToCloze(cloze: ClozeOptionalId): Cloze {
   cloze.uniqueId = JSON.stringify({contexts: cloze.contexts, clozes: cloze.clozes});
@@ -22,11 +24,13 @@ function addIdToCloze(cloze: ClozeOptionalId): Cloze {
 
 export interface Card {
   uniqueId: string;
+  kind: CardKind;
   prompt: string;
   responses: string[];
   pos?: string[];
   translation?: {[lang: string]: string};
 }
+export type CardKind = 'card';
 
 export type Quiz = Cloze|Card;
 
@@ -74,7 +78,7 @@ export function _separateAtSeparateds(s: string, n: number = 0) {
   return {atSeparatedValues, adverbs};
 }
 export function makeCard(prompt: string, responses: string[]): Card {
-  return {prompt, responses, uniqueId: JSON.stringify({prompt, responses})};
+  return {prompt, responses, uniqueId: JSON.stringify({prompt, responses}), kind: 'card'};
 }
 export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
   const atRe = /^#+\s+@\s+/;
@@ -237,7 +241,7 @@ function parseCloze(haystack: string, needleMaybeContext: string): ClozeOptional
     const left = haystack.slice(0, checkContext.index + leftContext.length);
     const right = haystack.slice(checkContext.index + checkContext[0].length - rightContext.length);
     if (fullRe.exec(haystack)) { throw new Error('Insufficient cloze context'); }
-    return {contexts: [left, null, right], clozes: [[cloze]]};
+    return {contexts: [left, null, right], clozes: [[cloze]], kind: 'cloze'};
   }
   let cloze = needleMaybeContext;
   let clozeRe = new RegExp(cloze, 'g');
@@ -246,7 +250,7 @@ function parseCloze(haystack: string, needleMaybeContext: string): ClozeOptional
     let left = haystack.slice(0, clozeHit.index);
     let right = haystack.slice(clozeHit.index + cloze.length);
     if (clozeRe.exec(haystack)) { throw new Error('Cloze context required'); }
-    return {contexts: [left, null, right], clozes: [[cloze]]};
+    return {contexts: [left, null, right], clozes: [[cloze]], kind: 'cloze'};
   }
   throw new Error('Cloze not found');
 }

@@ -52,7 +52,7 @@ function _separateAtSeparateds(s, n = 0) {
 }
 exports._separateAtSeparateds = _separateAtSeparateds;
 function makeCard(prompt, responses) {
-    return { prompt, responses, uniqueId: JSON.stringify({ prompt, responses }) };
+    return { prompt, responses, uniqueId: JSON.stringify({ prompt, responses }), kind: 'card' };
 }
 exports.makeCard = makeCard;
 function updateGraphWithBlock(graph, block) {
@@ -229,7 +229,7 @@ function parseCloze(haystack, needleMaybeContext) {
         if (fullRe.exec(haystack)) {
             throw new Error('Insufficient cloze context');
         }
-        return { contexts: [left, null, right], clozes: [[cloze]] };
+        return { contexts: [left, null, right], clozes: [[cloze]], kind: 'cloze' };
     }
     let cloze = needleMaybeContext;
     let clozeRe = new RegExp(cloze, 'g');
@@ -240,7 +240,7 @@ function parseCloze(haystack, needleMaybeContext) {
         if (clozeRe.exec(haystack)) {
             throw new Error('Cloze context required');
         }
-        return { contexts: [left, null, right], clozes: [[cloze]] };
+        return { contexts: [left, null, right], clozes: [[cloze]], kind: 'cloze' };
     }
     throw new Error('Cloze not found');
 }
