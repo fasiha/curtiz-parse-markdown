@@ -1,6 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const curtiz_utils_1 = require("curtiz-utils");
+const jmdict_furigana_node_1 = require("jmdict-furigana-node");
+var QuizKind;
+(function (QuizKind) {
+    QuizKind["Memory"] = "memory";
+    QuizKind["Cloze"] = "cloze";
+    QuizKind["Card"] = "card";
+    QuizKind["Match"] = "match";
+})(QuizKind = exports.QuizKind || (exports.QuizKind = {}));
 function addIdToCloze(cloze) {
     cloze.uniqueId = JSON.stringify({ contexts: cloze.contexts, clozes: cloze.clozes });
     return cloze;
@@ -52,7 +60,7 @@ function _separateAtSeparateds(s, n = 0) {
 }
 exports._separateAtSeparateds = _separateAtSeparateds;
 function makeCard(prompt, responses) {
-    return { prompt, responses, uniqueId: JSON.stringify({ prompt, responses }), kind: 'card' };
+    return { prompt, responses, uniqueId: JSON.stringify({ prompt, responses }), kind: QuizKind.Card };
 }
 exports.makeCard = makeCard;
 function updateGraphWithBlock(graph, block) {
@@ -60,6 +68,7 @@ function updateGraphWithBlock(graph, block) {
     const match = block[0].match(atRe);
     if (match) {
         const translationRe = /^-\s+@translation\s+/;
+        const furiganaRe = /^-\s+@furigana\s+/;
         const fillRe = /^-\s+@fill\s+/;
         const flashRe = /^-\s+@\s+/;
         const { atSeparatedValues: items, adverbs } = _separateAtSeparateds(block[0], match[0].length);
@@ -77,7 +86,7 @@ function updateGraphWithBlock(graph, block) {
                 translation[key.slice(3)] = adverbs[key];
             }
         }
-        for (let line of block.slice(1)) {
+        for (const line of block.slice(1)) {
             let match;
             if (match = line.match(translationRe)) {
                 //
@@ -89,6 +98,13 @@ function updateGraphWithBlock(graph, block) {
                     translation[k.replace(/^@/, '')] = v;
                 }
                 card.translation = translation;
+            }
+            else if (match = line.match(furiganaRe)) {
+                //
+                // Extract furigana
+                //
+                const furigana = jmdict_furigana_node_1.stringToFurigana(line.slice(match[0].length));
+                card.lede = furigana;
             }
             else if (match = line.match(fillRe)) {
                 //
@@ -229,7 +245,7 @@ function parseCloze(haystack, needleMaybeContext) {
         if (fullRe.exec(haystack)) {
             throw new Error('Insufficient cloze context');
         }
-        return { contexts: [left, null, right], clozes: [[cloze]], kind: 'cloze' };
+        return { contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze };
     }
     let cloze = needleMaybeContext;
     let clozeRe = new RegExp(cloze, 'g');
@@ -240,7 +256,7 @@ function parseCloze(haystack, needleMaybeContext) {
         if (clozeRe.exec(haystack)) {
             throw new Error('Cloze context required');
         }
-        return { contexts: [left, null, right], clozes: [[cloze]], kind: 'cloze' };
+        return { contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze };
     }
     throw new Error('Cloze not found');
 }

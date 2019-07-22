@@ -1,4 +1,26 @@
 import {partitionBy, zip} from 'curtiz-utils';
+import {Furigana, stringToFurigana} from 'jmdict-furigana-node';
+
+export enum QuizKind {
+  Memory = 'memory',
+  Cloze = 'cloze',
+  Card = 'card',
+  Match = 'match',
+}
+interface QuizBase {
+  uniqueId: string;
+  kind: QuizKind;
+  translation?: {[lang: string]: string};
+  lede?: Furigana[];
+}
+
+export interface QuizRemember extends QuizBase {
+  kind: QuizKind.Memory;
+}
+export interface QuizMatch extends QuizBase {
+  pairs: {text: Furigana[], translation: {[lang: string]: string}}[];
+  kind: QuizKind.Match;
+}
 
 /**
  * `N`-long `contexts` will have `C` `null`s and `N-C` non-null strings. The `null`s represent blanks.
@@ -7,32 +29,26 @@ import {partitionBy, zip} from 'curtiz-utils';
  * `{contexts: ['hello ', null, null], clozes: [['world', 'everyone', 'down there'], ['!']]}`
  * If available, `prompts` should be as long as `clozes` (`C`).
  */
-export interface Cloze {
-  uniqueId: string;
-  kind: ClozeKind;
+export interface QuizCloze extends QuizBase {
   contexts: (string|null)[];
   clozes: string[][];
+  kind: QuizKind.Cloze;
   prompts?: string[];
-  translation?: {[lang: string]: string};
 }
-export type ClozeKind = 'cloze';
-type ClozeOptionalId = Omit<Cloze, 'uniqueId'>&{uniqueId?: string};
-function addIdToCloze(cloze: ClozeOptionalId): Cloze {
+type ClozeOptionalId = Omit<QuizCloze, 'uniqueId'>&{uniqueId?: string};
+function addIdToCloze(cloze: ClozeOptionalId): QuizCloze {
   cloze.uniqueId = JSON.stringify({contexts: cloze.contexts, clozes: cloze.clozes});
-  return cloze as Cloze;
+  return cloze as QuizCloze;
 }
 
-export interface Card {
-  uniqueId: string;
-  kind: CardKind;
+export interface QuizCard extends QuizBase {
   prompt: string;
   responses: string[];
+  kind: QuizKind.Card;
   pos?: string[];
-  translation?: {[lang: string]: string};
 }
-export type CardKind = 'card';
 
-export type Quiz = Cloze|Card;
+export type Quiz = QuizCloze|QuizCard|QuizMatch|QuizRemember;
 
 interface Graph<T> {
   edges: Map<string, Set<string>>;
@@ -77,26 +93,27 @@ export function _separateAtSeparateds(s: string, n: number = 0) {
   }));
   return {atSeparatedValues, adverbs};
 }
-export function makeCard(prompt: string, responses: string[]): Card {
-  return {prompt, responses, uniqueId: JSON.stringify({prompt, responses}), kind: 'card'};
+export function makeCard(prompt: string, responses: string[]): QuizCard {
+  return {prompt, responses, uniqueId: JSON.stringify({prompt, responses}), kind: QuizKind.Card};
 }
 export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
   const atRe = /^#+\s+@\s+/;
   const match = block[0].match(atRe);
   if (match) {
     const translationRe = /^-\s+@translation\s+/;
+    const furiganaRe = /^-\s+@furigana\s+/;
     const fillRe = /^-\s+@fill\s+/;
     const flashRe = /^-\s+@\s+/;
 
     const {atSeparatedValues: items, adverbs} = _separateAtSeparateds(block[0], match[0].length);
     const [prompt, ...responses] = items;
-    let card: Card = makeCard(prompt, responses);
+    let card: QuizCard = makeCard(prompt, responses);
     addNodeWithRaw(graph, block[0], card);
 
-    let allFills: Cloze[] = [];
-    let allFlashes: Card[] = [];
-    let allFlashfillsPromptKanji: Cloze[] = [];
-    let allFlashfillsPromptReading: Cloze[] = [];
+    let allFills: QuizCloze[] = [];
+    let allFlashes: QuizCard[] = [];
+    let allFlashfillsPromptKanji: QuizCloze[] = [];
+    let allFlashfillsPromptReading: QuizCloze[] = [];
     let translation: {[lang: string]: string}|undefined = undefined;
     for (const key of Object.keys(adverbs)) {
       if (key.startsWith('@t-')) {
@@ -105,7 +122,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
       }
     }
 
-    for (let line of block.slice(1)) {
+    for (const line of block.slice(1)) {
       let match: RegExpMatchArray|null;
       if (match = line.match(translationRe)) {
         //
@@ -115,6 +132,12 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
         translation = translation || {};
         for (let [k, v] of Object.entries(translationAdverbs)) { translation[k.replace(/^@/, '')] = v; }
         card.translation = translation;
+      } else if (match = line.match(furiganaRe)) {
+        //
+        // Extract furigana
+        //
+        const furigana = stringToFurigana(line.slice(match[0].length));
+        card.lede = furigana;
       } else if (match = line.match(fillRe)) {
         //
         // Extract fill in the blank: either particle or conjugated phrase
@@ -132,7 +155,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
         //
         const {atSeparatedValues: items2, adverbs: flashAdverbs} = _separateAtSeparateds(line, match[0].length);
         const [prompt2, ...responses2] = items2;
-        let flash: Card = makeCard(prompt2, responses2);
+        let flash: QuizCard = makeCard(prompt2, responses2);
         if ('@pos' in flashAdverbs) { flash.pos = flashAdverbs['@pos'].split('-'); }
 
         // Is the header card is repeated in this bullet? Skip it. A part of speech might be present though
@@ -190,7 +213,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
     // Studying the flash or fill-flashes implies studying the other.
     for (const [flash, clozeKanji, clozeKana] of zip(allFlashes, allFlashfillsPromptKanji,
                                                      allFlashfillsPromptReading) as
-         IterableIterator<[Card, Cloze, Cloze]>) {
+         IterableIterator<[QuizCard, QuizCloze, QuizCloze]>) {
       addEdge(graph, flash, flash.uniqueId, clozeKanji, clozeKanji.uniqueId);
       addEdge(graph, flash, flash.uniqueId, clozeKana, clozeKana.uniqueId);
       addEdge(graph, clozeKanji, clozeKanji.uniqueId, flash, flash.uniqueId);
@@ -241,7 +264,7 @@ function parseCloze(haystack: string, needleMaybeContext: string): ClozeOptional
     const left = haystack.slice(0, checkContext.index + leftContext.length);
     const right = haystack.slice(checkContext.index + checkContext[0].length - rightContext.length);
     if (fullRe.exec(haystack)) { throw new Error('Insufficient cloze context'); }
-    return {contexts: [left, null, right], clozes: [[cloze]], kind: 'cloze'};
+    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze};
   }
   let cloze = needleMaybeContext;
   let clozeRe = new RegExp(cloze, 'g');
@@ -250,7 +273,7 @@ function parseCloze(haystack: string, needleMaybeContext: string): ClozeOptional
     let left = haystack.slice(0, clozeHit.index);
     let right = haystack.slice(clozeHit.index + cloze.length);
     if (clozeRe.exec(haystack)) { throw new Error('Cloze context required'); }
-    return {contexts: [left, null, right], clozes: [[cloze]], kind: 'cloze'};
+    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze};
   }
   throw new Error('Cloze not found');
 }

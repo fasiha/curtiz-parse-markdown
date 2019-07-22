@@ -64,6 +64,7 @@ test('small example', t => {
 - @translation @en Spirited Away (film)
 `;
   const graph = curtiz.textToGraph(s);
+  p(graph.edges);
   t.equal(12, graph.nodes.size); // one for the top-level, one for each fill, and 3 for each flash
 
   const nodes = [...graph.nodes.values()];

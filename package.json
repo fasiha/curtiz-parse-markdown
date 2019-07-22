@@ -15,6 +15,7 @@
     "typescript": "^3.5.1"
   },
   "dependencies": {
-    "curtiz-utils": "git+https://github.com/fasiha/curtiz-utils.git"
+    "curtiz-utils": "git+https://github.com/fasiha/curtiz-utils.git",
+    "jmdict-furigana-node": "git+https://github.com/fasiha/jmdict-furigana-node.git"
   }
 }
