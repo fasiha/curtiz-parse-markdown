@@ -1,5 +1,7 @@
-import {partitionBy, zip} from 'curtiz-utils';
+import {flatten, hasKanji, partitionBy, takeWhile, zip} from 'curtiz-utils';
 import {Furigana, stringToFurigana} from 'jmdict-furigana-node';
+
+import {hstack, Matrix, stringToMatrix, vstack} from './matrix';
 
 export enum QuizKind {
   Memory = 'memory',
@@ -17,6 +19,7 @@ interface QuizBase {
 export interface QuizRemember extends QuizBase {
   kind: QuizKind.Memory;
 }
+
 export interface QuizMatch extends QuizBase {
   pairs: {text: Furigana[], translation: {[lang: string]: string}}[];
   kind: QuizKind.Match;
@@ -45,6 +48,7 @@ export interface QuizCard extends QuizBase {
   prompt: string;
   responses: string[];
   kind: QuizKind.Card;
+  remember: boolean;
   pos?: string[];
 }
 
@@ -57,7 +61,7 @@ interface Graph<T> {
 export type QuizGraph = Graph<Quiz>&{raws: Map<string, Set<string>>};
 function emptyGraph(): QuizGraph { return {edges: new Map(), nodes: new Map(), raws: new Map()}; }
 function addNode<T>(graph: Graph<T>, node: T, id: string) {
-  if (!graph.nodes.has(id)) { graph.nodes.set(id, node); }
+  graph.nodes.set(id, {...(graph.nodes.get(id) || {}), ...node});
 }
 function addEdge<T>(graph: Graph<T>, parent: T, parentId: string, child: T, childId: string) {
   addNode(graph, parent, parentId);
@@ -69,6 +73,10 @@ function addEdge<T>(graph: Graph<T>, parent: T, parentId: string, child: T, chil
     graph.edges.set(parentId, new Set([childId]));
   }
 }
+function addEdgeQuiz<T extends QuizBase>(graph: Graph<T>, parent: T|undefined, child: T|undefined) {
+  if (!parent || !child) { return; }
+  addEdge(graph, parent, parent.uniqueId, child, child.uniqueId);
+}
 function addNodeWithRaw(graph: QuizGraph, raw: string, node: Quiz) {
   addNode(graph, node, node.uniqueId);
   let nodes = graph.raws.get(raw);
@@ -79,7 +87,20 @@ function addNodeWithRaw(graph: QuizGraph, raw: string, node: Quiz) {
   }
 }
 
-export function _separateAtSeparateds(s: string, n: number = 0) {
+function addRaw(graph: QuizGraph, raw: string, nodeId: string) {
+  let nodes = graph.raws.get(raw);
+  if (nodes) {
+    nodes.add(nodeId);
+  } else {
+    graph.raws.set(raw, new Set([nodeId]));
+  }
+}
+
+type AtLine = {
+  atSeparatedValues: string[],
+  adverbs: {[name: string]: string;},
+};
+export function _separateAtSeparateds(s: string, n: number = 0): AtLine {
   if (n) { s = s.slice(n); }
   const adverbMatch = s.match(/(^|\s)@\S/);
   const adverbIndex = adverbMatch ? adverbMatch.index : s.length;
@@ -93,9 +114,87 @@ export function _separateAtSeparateds(s: string, n: number = 0) {
   }));
   return {atSeparatedValues, adverbs};
 }
-export function makeCard(prompt: string, responses: string[]): QuizCard {
-  return {prompt, responses, uniqueId: JSON.stringify({prompt, responses}), kind: QuizKind.Card};
+export function makeCard(prompt: string, responses: string[], remember: boolean): QuizCard {
+  return {prompt, responses, uniqueId: JSON.stringify({prompt, responses, remember}), kind: QuizKind.Card, remember};
 }
+
+type Dict = {
+  [name: string]: string
+};
+function extractShortTranslation(adverbs: Dict): Dict|undefined {
+  let translation: Dict|undefined = undefined;
+  for (const key of Object.keys(adverbs)) {
+    if (key.startsWith('@t-')) {
+      translation = translation || {};
+      translation[key.slice(3)] = adverbs[key];
+    }
+  }
+  return translation;
+}
+
+function groupBy<T, U>(arr: T[], f: (x: T) => U): Map<U, T[]> {
+  const ret: Map<U, T[]> = new Map();
+  for (const x of arr) {
+    const y = f(x);
+    const hit = ret.get(y);
+    if (hit) {
+      hit.push(x);
+    } else {
+      ret.set(y, [x]);
+    }
+  }
+  return ret;
+}
+
+const RESPONSE_SEP = '・'
+function promptResponsesToCards(prompt: string, responses: string[]) {
+  const PASSIVE = makeCard(prompt, responses, true);
+  let SEEPROMPT: QuizCard|undefined;
+  let SEERESPONSE: QuizCard|undefined;
+  if ((responses.length > 1 || responses[0] !== prompt)) {
+    SEEPROMPT = makeCard(prompt, responses, false);
+    SEERESPONSE = makeCard(responses.join(RESPONSE_SEP), [prompt], false);
+  }
+
+  return {PASSIVE, SEEPROMPT, SEERESPONSE};
+}
+
+function makeGraphMatrix() {
+  const northwest = '011 101 000';
+  const north = '000 000 000';
+  const northeast = '111 111 000';
+  const west = '111 111 001';
+  const middle = '011 101 000';
+  const east = '111 111 001';
+  const southwest = '111 111 001';
+  const south = '000 111 001';
+  const southeast = '011 101 000';
+  const m = (m: string) => stringToMatrix(m);
+  return vstack(
+      hstack(...[northwest, north, northeast].map(m)),
+      hstack(...[west, middle, east].map(m)),
+      hstack(...[southwest, south, southeast].map(m)),
+  );
+}
+
+const GRAPHMATRIX = makeGraphMatrix();
+
+function link(graph: QuizGraph, sentenceCards: (QuizCard|undefined)[], vocabCards: (QuizCard|undefined)[],
+              clozes: (QuizCloze|undefined)[]) {
+  const [sa, sb, sc] = sentenceCards;
+  const [a, b, c] = vocabCards;
+  const [ca, cb, cc] = clozes;
+  const all = [sa, sb, sc, a, b, c, ca, cb, cc];
+  if (all.length !== GRAPHMATRIX.length || all.length !== GRAPHMATRIX[0].length) {
+    throw new Error('bad graph matrix size');
+  }
+  for (let parentidx = 0; parentidx < all.length; parentidx++) {
+    for (let childidx = 0; childidx < all.length; childidx++) {
+      if (GRAPHMATRIX[childidx][parentidx]) { addEdgeQuiz(graph, all[parentidx], all[childidx]); }
+    }
+  }
+}
+
 export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
   const atRe = /^#+\s+@\s+/;
   const match = block[0].match(atRe);
@@ -104,91 +203,131 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
     const furiganaRe = /^-\s+@furigana\s+/;
     const fillRe = /^-\s+@fill\s+/;
     const flashRe = /^-\s+@\s+/;
+    const unknownRe = /^\s*-\s+@/;
 
-    const {atSeparatedValues: items, adverbs} = _separateAtSeparateds(block[0], match[0].length);
-    const [prompt, ...responses] = items;
-    let card: QuizCard = makeCard(prompt, responses);
-    addNodeWithRaw(graph, block[0], card);
+    const headerFields: AtLine = _separateAtSeparateds(block[0]);
+    const [prompt, ...responses] = headerFields.atSeparatedValues;
+    if (!prompt) { throw new Error('no prompt? ' + JSON.stringify(headerFields)); }
+    if (responses.length === 0) { responses.push(prompt); }
+    const {PASSIVE, SEEPROMPT, SEERESPONSE} = promptResponsesToCards(prompt, responses);
+    const cards: QuizCard[] = [PASSIVE, SEEPROMPT, SEERESPONSE].filter(x => !!x) as QuizCard[];
 
-    let allFills: QuizCloze[] = [];
-    let allFlashes: QuizCard[] = [];
-    let allFlashfillsPromptKanji: QuizCloze[] = [];
-    let allFlashfillsPromptReading: QuizCloze[] = [];
-    let translation: {[lang: string]: string}|undefined = undefined;
-    for (const key of Object.keys(adverbs)) {
-      if (key.startsWith('@t-')) {
-        translation = translation || {};
-        translation[key.slice(3)] = adverbs[key];
+    const acceptableContiguousRegexps = [translationRe, furiganaRe, fillRe, flashRe, unknownRe];
+    const bullets = takeWhile(block.slice(1), line => acceptableContiguousRegexps.some(re => re.test(line)));
+
+    const translation: Dict|undefined =
+        extractShortTranslation(headerFields.adverbs) || bullets.filter(line => translationRe.test(line)).map(line => {
+          const match = line.match(translationRe);
+          if (!match) { throw new Error('typescript pacification: ' + line); }
+          const {adverbs} = _separateAtSeparateds(line, match[0].length);
+          const translation: Dict = {};
+          for (let [k, v] of Object.entries(adverbs)) { translation[k.replace(/^@/, '')] = v; }
+          return translation;
+        })[0];
+    const furigana: Furigana[]|undefined = bullets.filter(line => furiganaRe.test(line)).map(line => {
+      const match = line.match(fillRe);
+      if (!match) { throw new Error('typescript pacification: ' + line); }
+      return stringToFurigana(line.slice(match[0].length))
+    })[0];
+
+    if (furigana) { cards.forEach(node => node.lede = furigana); }
+    if (translation) { cards.forEach(node => node.translation = translation); }
+
+    const fills = bullets.filter(line => fillRe.test(line)).map(line => {
+      const match = line.match(fillRe);
+      if (!match) { throw new Error('typescript pacification: ' + line); }
+      const fill = _separateAtSeparateds(line, match[0].length);
+      const cloze = parseCloze(prompt, fill.atSeparatedValues[0]);
+      // add other valid entries
+      cloze.clozes[0].push(...fill.atSeparatedValues.slice(1));
+      // complete the graph node
+      const node = addIdToCloze(cloze);
+      addNodeWithRaw(graph, block[0] + '\n' + line, node);
+      for (const card of cards) {
+        addEdgeQuiz(graph, card, node);
+        addEdgeQuiz(graph, node, card); // flipped
       }
-    }
+      if (furigana) { node.lede = furigana; }
+      if (translation) { node.translation = translation; }
+      return node;
+    });
+
+    const flashs = bullets.filter(line => flashRe.test(line)).map(line => {
+      const match = line.match(flashRe);
+      if (!match) { throw new Error('typescript pacification: ' + line); }
+
+      const flash = _separateAtSeparateds(line, match[0].length);
+      const [prompt2, ...resp2] = flash.atSeparatedValues;
+      const {PASSIVE: subPassive, SEEPROMPT: subPrompt, SEERESPONSE: subResponse} =
+          promptResponsesToCards(prompt2, resp2);
+
+      const topFlashs = [subPassive, subPrompt, subResponse].filter(x => !!x) as QuizCard[];
+
+      // if this flashcard has a part of speech
+      if ('@pos' in flash.adverbs) { topFlashs.forEach(card => card.pos = flash.adverbs['@pos'].split('-')); }
+
+      // Is the header card is repeated in this bullet? Skip it.
+      if (prompt2 === prompt && resp2.length === responses.length && resp2.join('') === responses.join('')) {
+        if (!cards[0].pos && topFlashs[0].pos) { cards.forEach(card => card.pos = flash.adverbs.pos.split('-')); }
+        return;
+      }
+
+      // if local translation available
+      const thisTranslation = extractShortTranslation(flash.adverbs);
+      if (thisTranslation) { topFlashs.forEach(card => card.translation = thisTranslation); }
+
+      // Now enroll these top-level-equivalent flashcards into the graph
+      topFlashs.forEach(card => addNodeWithRaw(graph, block[0] + '\n' + line, card));
+
+      // Can I make fill-in-the-blank quizzes out of this flashcard?
+      let clozeSeeNothing: QuizCloze|undefined;
+      let clozeSeePrompt: QuizCloze|undefined;
+      let clozeSeeResponse: QuizCloze|undefined;
+      if ('@omit' in flash.adverbs || prompt.includes(prompt2)) {
+        const blank = flash.adverbs['@omit'] || prompt2;
+
+        if (subPassive && subPrompt && subResponse) {
+          // if I can make A', B', C'
+          {
+            const node = parseCloze(prompt, blank);
+            // no prompts, can answer with either prompt or response
+            node.clozes[0] = resp2.concat(prompt2);
+            clozeSeeNothing = addIdToCloze(node);
+          }
+          {
+            let node = parseCloze(prompt, blank);
+            // show cloze hint as the prompt
+            node.prompts = [prompt2];
+            // require answer to be responses (or prompt since IME)
+            node.clozes[0] = resp2.concat(prompt2);
+            clozeSeePrompt = addIdToCloze(node);
+          }
+          {
+            let node = parseCloze(prompt, blank);
+            node.prompts = [resp2.join(RESPONSE_SEP)];
+            node.clozes[0] = [prompt2];
+            clozeSeeResponse = addIdToCloze(node);
+          }
+        } else {
+          // Can only make A'
+          let node = parseCloze(prompt, blank);
+          // no prompts, can answer with either prompt or response
+          node.clozes[0] = resp2.concat(prompt2);
+          clozeSeeNothing = addIdToCloze(node);
+        }
+      }
+      link(graph, cards, topFlashs, [clozeSeeNothing, clozeSeePrompt, clozeSeeResponse]);
+    });
 
     for (const line of block.slice(1)) {
       let match: RegExpMatchArray|null;
-      if (match = line.match(translationRe)) {
-        //
-        // Extract translation
-        //
-        const {atSeparatedValues: _, adverbs: translationAdverbs} = _separateAtSeparateds(line, match[0].length);
-        translation = translation || {};
-        for (let [k, v] of Object.entries(translationAdverbs)) { translation[k.replace(/^@/, '')] = v; }
-        card.translation = translation;
-      } else if (match = line.match(furiganaRe)) {
-        //
-        // Extract furigana
-        //
-        const furigana = stringToFurigana(line.slice(match[0].length));
-        card.lede = furigana;
-      } else if (match = line.match(fillRe)) {
-        //
-        // Extract fill in the blank: either particle or conjugated phrase
-        //
-        const {atSeparatedValues: fills, adverbs: fillAdverbs} = _separateAtSeparateds(line, match[0].length);
-        const cloze = parseCloze(prompt, fills[0]);
-        // add other valid entries
-        cloze.clozes[0].push(...fills.slice(1));
-        const node = addIdToCloze(cloze);
-        allFills.push(node);
-        addNodeWithRaw(graph, block[0] + '\n' + line, node);
+      if (match = line.match(fillRe)) {
+        /****************************
+         * Extract fill in the blank: either particle or conjugated phrase
+         ***************************/
+
       } else if (match = line.match(flashRe)) {
-        //
-        // Extract flashcard
-        //
-        const {atSeparatedValues: items2, adverbs: flashAdverbs} = _separateAtSeparateds(line, match[0].length);
-        const [prompt2, ...responses2] = items2;
-        let flash: QuizCard = makeCard(prompt2, responses2);
-        if ('@pos' in flashAdverbs) { flash.pos = flashAdverbs['@pos'].split('-'); }
-
-        // Is the header card is repeated in this bullet? Skip it. A part of speech might be present though
-        if (flash.prompt === prompt && responses2.length === responses.length &&
-            responses2.join('') === responses.join('')) {
-          if (flash.pos && !card.pos) { card.pos = flash.pos; }
-          continue;
-        }
-
-        allFlashes.push(flash);
-        addNodeWithRaw(graph, block[0] + '\n' + line, flash);
-
-        // Can I make fill-in-the-blank quizzes out of this flashcard?
-        if ('@omit' in flashAdverbs || prompt.includes(prompt2)) {
-          const blank = flashAdverbs['@omit'] || prompt2;
-          { // first, make the blank's prompt be prompt2 and the acceptable answers be either prompt2 or responses2
-            let cloze = parseCloze(prompt, blank);
-            cloze.clozes = [responses2.concat(prompt2)];
-            cloze.prompts = [prompt2];
-            const node = addIdToCloze(cloze);
-            allFlashfillsPromptReading.push(node);
-            addNodeWithRaw(graph, block[0] + '\n' + line, node);
-          }
-          { // next, make the blank prompt be responses2 and the acceptable answer only prompt2
-            let cloze = parseCloze(prompt, blank);
-            cloze.clozes = [[prompt2]];
-            cloze.prompts = [responses2.join('||')];
-            const node = addIdToCloze(cloze);
-            allFlashfillsPromptKanji.push(node);
-            addNodeWithRaw(graph, block[0] + '\n' + line, node);
-          }
-        }
-      } else if (line.match(/^\s*-\s+@/)) {
+      } else if (line.match(unknownRe)) {
         // Sub-at-bullets and unrecognized at-bullets
       } else {
         // stop looking for @fill/@flash after initial @-bulleted list
@@ -198,6 +337,10 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
 
     // update translation
     if (translation) {
+      for (const line of block) {
+        const raw = line === block[0] ? line : block[0] + '\n' + line;
+        const hit = graph.raws.get(raw);
+      }
       card.translation = translation;
       for (const list of [allFills, allFlashfillsPromptKanji, allFlashfillsPromptReading]) {
         for (const ent of list) { ent.translation = translation; }
