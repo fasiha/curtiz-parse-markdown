@@ -276,7 +276,19 @@ function updateGraphWithBlock(graph, block) {
                     clozeSeeNothing = addIdToCloze(node);
                 }
             }
-            link(graph, cards, topFlashs, [clozeSeeNothing, clozeSeePrompt, clozeSeeResponse]);
+            const clozes = [clozeSeeNothing, clozeSeePrompt, clozeSeeResponse];
+            clozes.forEach(cloze => {
+                if (cloze) {
+                    addNodeWithRaw(graph, block[0] + '\n' + line, cloze);
+                    if (translation) {
+                        cloze.translation = translation;
+                    }
+                    if (furigana) {
+                        cloze.lede = furigana;
+                    }
+                }
+            });
+            link(graph, cards, topFlashs, clozes);
         });
         for (const line of block.slice(1)) {
             let match;
@@ -293,40 +305,6 @@ function updateGraphWithBlock(graph, block) {
             else {
                 // stop looking for @fill/@flash after initial @-bulleted list
                 break;
-            }
-        }
-        // update translation
-        if (translation) {
-            for (const line of block) {
-                const raw = line === block[0] ? line : block[0] + '\n' + line;
-                const hit = graph.raws.get(raw);
-            }
-            card.translation = translation;
-            for (const list of [allFills, allFlashfillsPromptKanji, allFlashfillsPromptReading]) {
-                for (const ent of list) {
-                    ent.translation = translation;
-                }
-            }
-        }
-        // All nodes should have been added, along with raws. Now build edges.
-        //
-        // Studying the card implies everything else was studied too: flashes, fills, and flash-fills
-        for (const children of [allFlashes, allFills, allFlashfillsPromptKanji, allFlashfillsPromptReading]) {
-            for (const child of children) {
-                addEdge(graph, card, card.uniqueId, child, child.uniqueId);
-            }
-        }
-        // Studying the flash or fill-flashes implies studying the other.
-        for (const [flash, clozeKanji, clozeKana] of curtiz_utils_1.zip(allFlashes, allFlashfillsPromptKanji, allFlashfillsPromptReading)) {
-            addEdge(graph, flash, flash.uniqueId, clozeKanji, clozeKanji.uniqueId);
-            addEdge(graph, flash, flash.uniqueId, clozeKana, clozeKana.uniqueId);
-            addEdge(graph, clozeKanji, clozeKanji.uniqueId, flash, flash.uniqueId);
-            addEdge(graph, clozeKana, clozeKana.uniqueId, flash, flash.uniqueId);
-        }
-        // Studying fills or fill-flashes implies studying the card
-        for (const fills of [allFills, allFlashfillsPromptKanji, allFlashfillsPromptReading]) {
-            for (const fill of fills) {
-                addEdge(graph, fill, fill.uniqueId, card, card.uniqueId);
             }
         }
     }
