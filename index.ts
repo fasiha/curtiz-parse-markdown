@@ -16,10 +16,6 @@ interface QuizBase {
   lede?: Furigana[];
 }
 
-export interface QuizRemember extends QuizBase {
-  kind: QuizKind.Memory;
-}
-
 export interface QuizMatch extends QuizBase {
   pairs: {text: Furigana[], translation: {[lang: string]: string}}[];
   kind: QuizKind.Match;
@@ -48,11 +44,12 @@ export interface QuizCard extends QuizBase {
   prompt: string;
   responses: string[];
   kind: QuizKind.Card;
-  remember: boolean;
+  passive: boolean;
+  inverted: boolean;
   pos?: string[];
 }
 
-export type Quiz = QuizCloze|QuizCard|QuizMatch|QuizRemember;
+export type Quiz = QuizCloze|QuizCard|QuizMatch;
 
 interface Graph<T> {
   edges: Map<string, Set<string>>;
@@ -114,8 +111,15 @@ export function _separateAtSeparateds(s: string, n: number = 0): AtLine {
   }));
   return {atSeparatedValues, adverbs};
 }
-export function makeCard(prompt: string, responses: string[], remember: boolean): QuizCard {
-  return {prompt, responses, uniqueId: JSON.stringify({prompt, responses, remember}), kind: QuizKind.Card, remember};
+export function makeCard(prompt: string, responses: string[], passive: boolean, inverted: boolean): QuizCard {
+  return {
+    prompt,
+    responses,
+    uniqueId: JSON.stringify({prompt, responses, passive}),
+    kind: QuizKind.Card,
+    passive,
+    inverted
+  };
 }
 
 type Dict = {
@@ -148,12 +152,14 @@ function groupBy<T, U>(arr: T[], f: (x: T) => U): Map<U, T[]> {
 
 const RESPONSE_SEP = '・'
 function promptResponsesToCards(prompt: string, responses: string[]) {
-  const PASSIVE = makeCard(prompt, responses, true);
+  const passiveconstant = true;
+  const invertedconstant = true;
+  const PASSIVE = makeCard(prompt, responses, passiveconstant, !invertedconstant);
   let SEEPROMPT: QuizCard|undefined;
   let SEERESPONSE: QuizCard|undefined;
   if ((responses.length > 1 || responses[0] !== prompt)) {
-    SEEPROMPT = makeCard(prompt, responses, false);
-    SEERESPONSE = makeCard(responses.join(RESPONSE_SEP), [prompt], false);
+    SEEPROMPT = makeCard(prompt, responses, !passiveconstant, !invertedconstant);
+    SEERESPONSE = makeCard(responses.join(RESPONSE_SEP), [prompt], !passiveconstant, invertedconstant);
   }
 
   return {PASSIVE, SEEPROMPT, SEERESPONSE};
@@ -205,12 +211,13 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
     const flashRe = /^-\s+@\s+/;
     const unknownRe = /^\s*-\s+@/;
 
-    const headerFields: AtLine = _separateAtSeparateds(block[0]);
+    const headerFields: AtLine = _separateAtSeparateds(block[0], match[0].length);
     const [prompt, ...responses] = headerFields.atSeparatedValues;
     if (!prompt) { throw new Error('no prompt? ' + JSON.stringify(headerFields)); }
     if (responses.length === 0) { responses.push(prompt); }
     const {PASSIVE, SEEPROMPT, SEERESPONSE} = promptResponsesToCards(prompt, responses);
     const cards: QuizCard[] = [PASSIVE, SEEPROMPT, SEERESPONSE].filter(x => !!x) as QuizCard[];
+    cards.forEach(card => addNodeWithRaw(graph, block[0], card));
 
     const acceptableContiguousRegexps = [translationRe, furiganaRe, fillRe, flashRe, unknownRe];
     const bullets = takeWhile(block.slice(1), line => acceptableContiguousRegexps.some(re => re.test(line)));
@@ -218,24 +225,25 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
     const translation: Dict|undefined =
         extractShortTranslation(headerFields.adverbs) || bullets.filter(line => translationRe.test(line)).map(line => {
           const match = line.match(translationRe);
-          if (!match) { throw new Error('typescript pacification: ' + line); }
+          if (!match) { throw new Error('typescript pacification TRANSLATION: ' + line); }
           const {adverbs} = _separateAtSeparateds(line, match[0].length);
           const translation: Dict = {};
           for (let [k, v] of Object.entries(adverbs)) { translation[k.replace(/^@/, '')] = v; }
           return translation;
         })[0];
     const furigana: Furigana[]|undefined = bullets.filter(line => furiganaRe.test(line)).map(line => {
-      const match = line.match(fillRe);
-      if (!match) { throw new Error('typescript pacification: ' + line); }
+      const match = line.match(furiganaRe);
+      if (!match) { throw new Error('typescript pacification FURIGANA: ' + line); }
       return stringToFurigana(line.slice(match[0].length))
     })[0];
 
     if (furigana) { cards.forEach(node => node.lede = furigana); }
     if (translation) { cards.forEach(node => node.translation = translation); }
+    link(graph, cards, [], []); // might not get the opportunity to later
 
     const fills = bullets.filter(line => fillRe.test(line)).map(line => {
       const match = line.match(fillRe);
-      if (!match) { throw new Error('typescript pacification: ' + line); }
+      if (!match) { throw new Error('typescript pacification FILL: ' + line); }
       const fill = _separateAtSeparateds(line, match[0].length);
       const cloze = parseCloze(prompt, fill.atSeparatedValues[0]);
       // add other valid entries
@@ -254,7 +262,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
 
     const flashs = bullets.filter(line => flashRe.test(line)).map(line => {
       const match = line.match(flashRe);
-      if (!match) { throw new Error('typescript pacification: ' + line); }
+      if (!match) { throw new Error('typescript pacification FLASH: ' + line); }
 
       const flash = _separateAtSeparateds(line, match[0].length);
       const [prompt2, ...resp2] = flash.atSeparatedValues;
@@ -263,12 +271,21 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
 
       const topFlashs = [subPassive, subPrompt, subResponse].filter(x => !!x) as QuizCard[];
 
-      // if this flashcard has a part of speech
+      // if this flashcard has a part of speech or furigana
+      if ('@furigana' in flash.adverbs) {
+        const lede = stringToFurigana(flash.adverbs['@furigana']);
+        topFlashs.forEach(card => card.lede = lede);
+      }
       if ('@pos' in flash.adverbs) { topFlashs.forEach(card => card.pos = flash.adverbs['@pos'].split('-')); }
 
       // Is the header card is repeated in this bullet? Skip it.
       if (prompt2 === prompt && resp2.length === responses.length && resp2.join('') === responses.join('')) {
-        if (!cards[0].pos && topFlashs[0].pos) { cards.forEach(card => card.pos = flash.adverbs.pos.split('-')); }
+        if (!cards[0].pos && topFlashs[0].pos) {
+          cards.forEach(card => {
+            card.pos = topFlashs[0].pos;
+            addNodeWithRaw(graph, block[0], card); // merge pos
+          });
+        }
         return;
       }
 
@@ -327,22 +344,6 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
       });
       link(graph, cards, topFlashs, clozes);
     });
-
-    for (const line of block.slice(1)) {
-      let match: RegExpMatchArray|null;
-      if (match = line.match(fillRe)) {
-        /****************************
-         * Extract fill in the blank: either particle or conjugated phrase
-         ***************************/
-
-      } else if (match = line.match(flashRe)) {
-      } else if (line.match(unknownRe)) {
-        // Sub-at-bullets and unrecognized at-bullets
-      } else {
-        // stop looking for @fill/@flash after initial @-bulleted list
-        break;
-      }
-    }
   }
 }
 

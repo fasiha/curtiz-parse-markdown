@@ -73,8 +73,15 @@ function _separateAtSeparateds(s, n = 0) {
     return { atSeparatedValues, adverbs };
 }
 exports._separateAtSeparateds = _separateAtSeparateds;
-function makeCard(prompt, responses, remember) {
-    return { prompt, responses, uniqueId: JSON.stringify({ prompt, responses, remember }), kind: QuizKind.Card, remember };
+function makeCard(prompt, responses, passive, inverted) {
+    return {
+        prompt,
+        responses,
+        uniqueId: JSON.stringify({ prompt, responses, passive }),
+        kind: QuizKind.Card,
+        passive,
+        inverted
+    };
 }
 exports.makeCard = makeCard;
 function extractShortTranslation(adverbs) {
@@ -103,12 +110,14 @@ function groupBy(arr, f) {
 }
 const RESPONSE_SEP = '・';
 function promptResponsesToCards(prompt, responses) {
-    const PASSIVE = makeCard(prompt, responses, true);
+    const passiveconstant = true;
+    const invertedconstant = true;
+    const PASSIVE = makeCard(prompt, responses, passiveconstant, !invertedconstant);
     let SEEPROMPT;
     let SEERESPONSE;
     if ((responses.length > 1 || responses[0] !== prompt)) {
-        SEEPROMPT = makeCard(prompt, responses, false);
-        SEERESPONSE = makeCard(responses.join(RESPONSE_SEP), [prompt], false);
+        SEEPROMPT = makeCard(prompt, responses, !passiveconstant, !invertedconstant);
+        SEERESPONSE = makeCard(responses.join(RESPONSE_SEP), [prompt], !passiveconstant, invertedconstant);
     }
     return { PASSIVE, SEEPROMPT, SEERESPONSE };
 }
@@ -151,7 +160,7 @@ function updateGraphWithBlock(graph, block) {
         const fillRe = /^-\s+@fill\s+/;
         const flashRe = /^-\s+@\s+/;
         const unknownRe = /^\s*-\s+@/;
-        const headerFields = _separateAtSeparateds(block[0]);
+        const headerFields = _separateAtSeparateds(block[0], match[0].length);
         const [prompt, ...responses] = headerFields.atSeparatedValues;
         if (!prompt) {
             throw new Error('no prompt? ' + JSON.stringify(headerFields));
@@ -161,12 +170,13 @@ function updateGraphWithBlock(graph, block) {
         }
         const { PASSIVE, SEEPROMPT, SEERESPONSE } = promptResponsesToCards(prompt, responses);
         const cards = [PASSIVE, SEEPROMPT, SEERESPONSE].filter(x => !!x);
+        cards.forEach(card => addNodeWithRaw(graph, block[0], card));
         const acceptableContiguousRegexps = [translationRe, furiganaRe, fillRe, flashRe, unknownRe];
         const bullets = curtiz_utils_1.takeWhile(block.slice(1), line => acceptableContiguousRegexps.some(re => re.test(line)));
         const translation = extractShortTranslation(headerFields.adverbs) || bullets.filter(line => translationRe.test(line)).map(line => {
             const match = line.match(translationRe);
             if (!match) {
-                throw new Error('typescript pacification: ' + line);
+                throw new Error('typescript pacification TRANSLATION: ' + line);
             }
             const { adverbs } = _separateAtSeparateds(line, match[0].length);
             const translation = {};
@@ -176,9 +186,9 @@ function updateGraphWithBlock(graph, block) {
             return translation;
         })[0];
         const furigana = bullets.filter(line => furiganaRe.test(line)).map(line => {
-            const match = line.match(fillRe);
+            const match = line.match(furiganaRe);
             if (!match) {
-                throw new Error('typescript pacification: ' + line);
+                throw new Error('typescript pacification FURIGANA: ' + line);
             }
             return jmdict_furigana_node_1.stringToFurigana(line.slice(match[0].length));
         })[0];
@@ -188,10 +198,11 @@ function updateGraphWithBlock(graph, block) {
         if (translation) {
             cards.forEach(node => node.translation = translation);
         }
+        link(graph, cards, [], []); // might not get the opportunity to later
         const fills = bullets.filter(line => fillRe.test(line)).map(line => {
             const match = line.match(fillRe);
             if (!match) {
-                throw new Error('typescript pacification: ' + line);
+                throw new Error('typescript pacification FILL: ' + line);
             }
             const fill = _separateAtSeparateds(line, match[0].length);
             const cloze = parseCloze(prompt, fill.atSeparatedValues[0]);
@@ -215,20 +226,27 @@ function updateGraphWithBlock(graph, block) {
         const flashs = bullets.filter(line => flashRe.test(line)).map(line => {
             const match = line.match(flashRe);
             if (!match) {
-                throw new Error('typescript pacification: ' + line);
+                throw new Error('typescript pacification FLASH: ' + line);
             }
             const flash = _separateAtSeparateds(line, match[0].length);
             const [prompt2, ...resp2] = flash.atSeparatedValues;
             const { PASSIVE: subPassive, SEEPROMPT: subPrompt, SEERESPONSE: subResponse } = promptResponsesToCards(prompt2, resp2);
             const topFlashs = [subPassive, subPrompt, subResponse].filter(x => !!x);
-            // if this flashcard has a part of speech
+            // if this flashcard has a part of speech or furigana
+            if ('@furigana' in flash.adverbs) {
+                const lede = jmdict_furigana_node_1.stringToFurigana(flash.adverbs['@furigana']);
+                topFlashs.forEach(card => card.lede = lede);
+            }
             if ('@pos' in flash.adverbs) {
                 topFlashs.forEach(card => card.pos = flash.adverbs['@pos'].split('-'));
             }
             // Is the header card is repeated in this bullet? Skip it.
             if (prompt2 === prompt && resp2.length === responses.length && resp2.join('') === responses.join('')) {
                 if (!cards[0].pos && topFlashs[0].pos) {
-                    cards.forEach(card => card.pos = flash.adverbs.pos.split('-'));
+                    cards.forEach(card => {
+                        card.pos = topFlashs[0].pos;
+                        addNodeWithRaw(graph, block[0], card); // merge pos
+                    });
                 }
                 return;
             }
@@ -290,23 +308,6 @@ function updateGraphWithBlock(graph, block) {
             });
             link(graph, cards, topFlashs, clozes);
         });
-        for (const line of block.slice(1)) {
-            let match;
-            if (match = line.match(fillRe)) {
-                /****************************
-                 * Extract fill in the blank: either particle or conjugated phrase
-                 ***************************/
-            }
-            else if (match = line.match(flashRe)) {
-            }
-            else if (line.match(unknownRe)) {
-                // Sub-at-bullets and unrecognized at-bullets
-            }
-            else {
-                // stop looking for @fill/@flash after initial @-bulleted list
-                break;
-            }
-        }
     }
 }
 exports.updateGraphWithBlock = updateGraphWithBlock;

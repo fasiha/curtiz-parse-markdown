@@ -16,15 +16,15 @@ test('no nodes/edges created for non-header blocks', t => {
 });
 
 function multipleOk(t, graph) {
-  t.equal(graph.edges.size, 0);
-  t.equal(graph.nodes.size, 1);
+  t.equal(graph.edges.size, 3);
+  t.equal(graph.nodes.size, 3);
+  t.equal(Array.from(graph.edges.values(), set => set.size).reduce((prev, curr) => prev + curr, 0), 4);
   let nodes = [...graph.nodes.values()];
   t.equal(nodes[0].responses.length, 3);
 }
 test('multiple responses ok', t => {
   let s = `# @ 私 @ わたし @ わたくし @ あたし`;
   let graph = curtiz.textToGraph(s);
-  // p(graph);
   multipleOk(t, graph);
   t.end();
 });
@@ -56,16 +56,17 @@ test('translation single-line', t => {
 
 test('small example', t => {
   const s = `## @ 千と千尋の神隠し @ せんとちひろのかみがくし
-- @fill と
-- @fill の
-- @ 千 @ せん    @pos noun-proper-name-firstname @omit [千]と
-- @ 千尋 @ ちひろ    @pos noun-proper-name-firstname
-- @ 神隠し @ かみがくし    @pos noun-common-general
+- @furigana {千}^{せん}と{千}^{ち}{尋}^{ひろ}の{神}^{かみ}{隠}^{かく}し
+- @fill と    @pos particle-case
+- @fill の    @pos particle-case
+- @ 千 @ せん    @pos noun-proper-name-firstname @omit [千]と @furigana {千}^{せん}
+- @ 千尋 @ ちひろ    @pos noun-proper-name-firstname @furigana {千}^{ち}{尋}^{ひろ}
+- @ 神隠し @ かみがくし    @pos noun-common-general @furigana {神}^{かみ}{隠}^{かく}し
 - @translation @en Spirited Away (film)
 `;
   const graph = curtiz.textToGraph(s);
-  p(graph.edges);
-  t.equal(12, graph.nodes.size); // one for the top-level, one for each fill, and 3 for each flash
+  // p(graph);
+  t.equal(20, graph.nodes.size); // 3 cards top-level, 1 cloze/fill, and 5/flash (3 card and 2 cloze)
 
   const nodes = [...graph.nodes.values()];
 
@@ -76,10 +77,9 @@ test('small example', t => {
   const particles = nodes.filter(q => q.clozes && 'との'.split('').indexOf(q.clozes[0][0]) >= 0);
   t.equal(particles.length, 2);
 
-  let flashes = nodes.filter(q => q.prompt && q.responses);
-  flashes.sort((a, b) => a.prompt.length - b.prompt.length);
-  t.equal(flashes.length, 4);
-  for (const flash of flashes.slice(0, -1)) { t.notOk(flash.translation, 'no translation'); }
+  let flashes = nodes.filter(q => q.kind === 'card');
+  t.equal(flashes.length, 12);
+  t.equal(flashes.filter(card => 'translation' in card).length, 3, 'only header has translation');
 
   const fills = nodes.filter(q => 'clozes' in q);
   t.equal(fills.length, 8, '1 fill per particle/conj phrase, 2 per flash');
@@ -107,7 +107,7 @@ test('second example', t => {
   const fills = nodes.filter(q => q.clozes && !q.prompts);
   t.equal(fills.length, 2);
   const conjfill = fills.filter(q => q.clozes[0].length === 2);
-  t.ok(conjfill, 'kanji and kana are both clozes')
+  t.equal(conjfill.length, 1, 'kanji and kana are both clozes')
 
   t.end();
 });
@@ -118,8 +118,8 @@ test('third example', t => {
 `;
   const graph = curtiz.textToGraph(s);
   const nodes = [...graph.nodes.values()];
-  t.equal(nodes.length, 1, '1 node despite repeated flash with POS');
-  t.equal(graph.edges.size, 0, 'no edges because only 1 node');
+  t.equal(nodes.length, 3, 'only header (no bullet) nodes, despite repeated flash with POS');
+  t.equal(graph.edges.size, 3, 'only intra-header edges');
   t.ok(nodes[0].pos && nodes[0].pos.length === 4, 'pos exists');
   t.end();
 });
@@ -136,7 +136,7 @@ test('two sentences share one flashcard', t => {
 `;
   const graph = curtiz.textToGraph(s);
   const nodes = [...graph.nodes.values()];
-  t.equal(nodes.length, 15, 'one fewer node than expected since one is shared');
+  t.equal(nodes.length, 3 + 1 + 5 * 2 + 3 + 1 + 5 * 2 - 3, '3 fewer nodes than expected since one bullet is shared');
 
   const chihiroKeys =
       '## @ 千と千尋の神隠し @ せんとちひろのかみがくし\n## @ 千尋のお父さん @ ちひろのおちちさん'.split('\n')
@@ -153,4 +153,4 @@ test('two sentences share one flashcard', t => {
   t.equal(chihiroNodes[0], chihiroNodes[1], 'both are the same object');
 
   t.end();
-})
+});
