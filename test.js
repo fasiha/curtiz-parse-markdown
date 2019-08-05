@@ -1,7 +1,7 @@
 "use strict";
 const curtiz = require('./index');
 const test = require('tape');
-const {difference} = require('curtiz-utils');
+const {difference, flatten} = require('curtiz-utils');
 
 const p = x => console.dir(x, {depth: null});
 
@@ -66,7 +66,7 @@ test('small example', t => {
 `;
   const graph = curtiz.textToGraph(s);
   // p(graph);
-  t.equal(20, graph.nodes.size); // 3 cards top-level, 1 cloze/fill, and 5/flash (3 card and 2 cloze)
+  t.equal(3 + 2 + 3 * 6, graph.nodes.size); // 3 cards top-level, 1 cloze/fill, and 6/flash (3 card and 3 cloze)
 
   const nodes = [...graph.nodes.values()];
 
@@ -82,11 +82,15 @@ test('small example', t => {
   t.equal(flashes.filter(card => 'translation' in card).length, 3, 'only header has translation');
 
   const fills = nodes.filter(q => 'clozes' in q);
-  t.equal(fills.length, 8, '1 fill per particle/conj phrase, 2 per flash');
+  t.equal(fills.length, 2 + 3 * 3, '1 fill per particle/conj phrase, 3 per flash');
   const nonparticles = [...difference(new Set(fills), new Set(particles))];
-  t.equal(nonparticles.length, 6, '2 fills per flash');
-  const firstClozes = new Set(nonparticles.map(c => c.clozes[0][0]));
-  const prompts = new Set(nonparticles.map(c => c.prompts[0]));
+  t.equal(nonparticles.length, 3 * 3, '3 fills per flash');
+
+  t.equal(nonparticles.filter(c => !c.prompts).length, 3, '1/fill without prompts');
+
+  const withprompt = nonparticles.filter(c => 'prompts' in c);
+  const firstClozes = new Set(withprompt.map(c => c.clozes[0][0]));
+  const prompts = new Set(withprompt.map(c => c.prompts[0]));
   for (const cloze of firstClozes) { t.ok(prompts.has(cloze), 'first cloze is a prompt'); }
   for (const prompt of prompts) { t.ok(firstClozes.has(prompt), 'prompt is a cloze'); }
 
@@ -104,10 +108,10 @@ test('second example', t => {
 `;
   const graph = curtiz.textToGraph(s);
   const nodes = [...graph.nodes.values()];
-  const fills = nodes.filter(q => q.clozes && !q.prompts);
-  t.equal(fills.length, 2);
+  const fills = nodes.filter(q => q.kind === 'cloze' && !q.prompts);
+  t.equal(fills.length, 2 + 4, '1 clozes/particle + 1 cloze/vocab without prompt');
   const conjfill = fills.filter(q => q.clozes[0].length === 2);
-  t.equal(conjfill.length, 1, 'kanji and kana are both clozes')
+  t.equal(conjfill.length, 1 + 4, 'kanji and kana are both clozes')
 
   t.end();
 });
@@ -136,7 +140,7 @@ test('two sentences share one flashcard', t => {
 `;
   const graph = curtiz.textToGraph(s);
   const nodes = [...graph.nodes.values()];
-  t.equal(nodes.length, 3 + 1 + 5 * 2 + 3 + 1 + 5 * 2 - 3, '3 fewer nodes than expected since one bullet is shared');
+  t.equal(nodes.length, 3 + 1 + 6 * 2 + 3 + 1 + 6 * 2 - 3, '3 fewer nodes than expected since one bullet is shared');
 
   const chihiroKeys =
       '## @ 千と千尋の神隠し @ せんとちひろのかみがくし\n## @ 千尋のお父さん @ ちひろのおちちさん'.split('\n')
@@ -151,6 +155,36 @@ test('two sentences share one flashcard', t => {
   t.equal(chihiroNodes.length, 2, 'found two chihiro nodes');
   t.ok(chihiroNodes.every(n => n.prompt && n.responses), 'both chihiro nodes are Clozes');
   t.equal(chihiroNodes[0], chihiroNodes[1], 'both are the same object');
+
+  t.end();
+});
+
+test('match quiz', t => {
+  const s = `## @ 千と千尋の神隠し @ せんとちひろのかみがくし
+- @translation @en Spirited Away (film)
+- @furigana {千}^{せん}と{千}^{ち}{尋}^{ひろ}の{神}^{かみ}{隠}^{かく}し
+- @fill と    @pos particle-case
+- @fill の    @pos particle-case
+- @ 千 @ せん    @pos noun-proper-name-firstname @omit [千]と @furigana {千}^{せん} @t-en Sen (name)
+- @ 千尋 @ ちひろ    @pos noun-proper-name-firstname @furigana {千}^{ち}{尋}^{ひろ} @t-en Chihiro (name)
+- @ 神隠し @ かみがくし    @pos noun-common-general @furigana {神}^{かみ}{隠}^{かく}し @t-en spirits hiding
+## @ 千尋のお父さん @ ちひろのおちちさん @t-en Chihiro's father
+- @furigana {千}^{ち}{尋}^{ひろ}のお{父}^{ちち}さん
+- @fill の    @pos particle-case
+- @ 千尋 @ ちひろ    @pos noun-proper-name-firstname @furigana {千}^{ち}{尋}^{ひろ} @t-en Chihiro (name)
+- @ 父 @ ちち    @pos noun-common-general @furigana {父}^{ちち} @t-en father
+`;
+
+  const graph = curtiz.textToGraph(s);
+  const nodes = [...graph.nodes.values()];
+  const matches = nodes.filter(n => n.kind === curtiz.QuizKind.Match);
+  t.equal(matches.length, 2);
+
+  t.ok(matches[0].uniqueId.includes('spirits hiding'), 'just make sure this is the right match node');
+  t.equal(graph.edges.get(matches[0].uniqueId).size, 2 + 4 * (3), 'match has right # of children');
+
+  let parents = Array.from(graph.edges.values()).filter(set => set.has(matches[0].uniqueId));
+  t.equal(parents.length, 3 + 3 * 3, 'match has right # of parents');
 
   t.end();
 });

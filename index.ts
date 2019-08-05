@@ -4,7 +4,6 @@ import {Furigana, stringToFurigana} from 'jmdict-furigana-node';
 import {hstack, Matrix, stringToMatrix, vstack} from './matrix';
 
 export enum QuizKind {
-  Memory = 'memory',
   Cloze = 'cloze',
   Card = 'card',
   Match = 'match',
@@ -16,8 +15,15 @@ interface QuizBase {
   lede?: Furigana[];
 }
 
+type Dict = {
+  [name: string]: string
+};
+export type MatchPiece = {
+  text: Furigana[],
+  translation: Dict
+};
 export interface QuizMatch extends QuizBase {
-  pairs: {text: Furigana[], translation: {[lang: string]: string}}[];
+  pairs: MatchPiece[];
   kind: QuizKind.Match;
 }
 
@@ -36,7 +42,7 @@ export interface QuizCloze extends QuizBase {
 }
 type ClozeOptionalId = Omit<QuizCloze, 'uniqueId'>&{uniqueId?: string};
 function addIdToCloze(cloze: ClozeOptionalId): QuizCloze {
-  cloze.uniqueId = JSON.stringify({contexts: cloze.contexts, clozes: cloze.clozes});
+  cloze.uniqueId = JSON.stringify({contexts: cloze.contexts, clozes: cloze.clozes, prompts: cloze.prompts});
   return cloze as QuizCloze;
 }
 
@@ -122,9 +128,6 @@ export function makeCard(prompt: string, responses: string[], passive: boolean, 
   };
 }
 
-type Dict = {
-  [name: string]: string
-};
 function extractShortTranslation(adverbs: Dict): Dict|undefined {
   let translation: Dict|undefined = undefined;
   for (const key of Object.keys(adverbs)) {
@@ -134,20 +137,6 @@ function extractShortTranslation(adverbs: Dict): Dict|undefined {
     }
   }
   return translation;
-}
-
-function groupBy<T, U>(arr: T[], f: (x: T) => U): Map<U, T[]> {
-  const ret: Map<U, T[]> = new Map();
-  for (const x of arr) {
-    const y = f(x);
-    const hit = ret.get(y);
-    if (hit) {
-      hit.push(x);
-    } else {
-      ret.set(y, [x]);
-    }
-  }
-  return ret;
 }
 
 const RESPONSE_SEP = '・'
@@ -166,6 +155,7 @@ function promptResponsesToCards(prompt: string, responses: string[]) {
 }
 
 function makeGraphMatrix() {
+  // 9x9 linking sentence flashcards, sub-sentence vocab flashcards, and vocab-cloze-deleted quizzes
   const northwest = '011 101 000';
   const north = '000 000 000';
   const northeast = '111 111 000';
@@ -176,27 +166,38 @@ function makeGraphMatrix() {
   const south = '000 111 001';
   const southeast = '011 101 000';
   const m = (m: string) => stringToMatrix(m);
-  return vstack(
+  const SENTENCEMAT = vstack(
       hstack(...[northwest, north, northeast].map(m)),
       hstack(...[west, middle, east].map(m)),
       hstack(...[southwest, south, southeast].map(m)),
   );
+
+  // the 10x10 matrix linking the above 9 with a matching (translation) quiz
+  const nineZeros = '0'.repeat(9);
+  const vertCol = '110110110'.split('');
+  const firstNineRows = vertCol.map(x => nineZeros + x);
+  const finalRow = '1110001110'
+  const matrixS = firstNineRows.join(' ') + ' ' + finalRow;
+  const MATCHMAT = stringToMatrix(matrixS);
+  if (MATCHMAT.length !== 10 || MATCHMAT.some(row => row.length !== 10)) { throw new Error('wat'); }
+
+  return {SENTENCEMAT, MATCHMAT};
 }
 
-const GRAPHMATRIX = makeGraphMatrix();
+const {SENTENCEMAT, MATCHMAT} = makeGraphMatrix();
 
-function link(graph: QuizGraph, sentenceCards: (QuizCard|undefined)[], vocabCards: (QuizCard|undefined)[],
-              clozes: (QuizCloze|undefined)[]) {
-  const [sa, sb, sc] = sentenceCards;
-  const [a, b, c] = vocabCards;
-  const [ca, cb, cc] = clozes;
-  const all = [sa, sb, sc, a, b, c, ca, cb, cc];
-  if (all.length !== GRAPHMATRIX.length || all.length !== GRAPHMATRIX[0].length) {
+function link(graph: QuizGraph, matrix: number[][], nodes: (Quiz|undefined)[]) {
+  if (nodes.length !== matrix.length || matrix.some(row => row.length !== nodes.length)) {
     throw new Error('bad graph matrix size');
   }
-  for (let parentidx = 0; parentidx < all.length; parentidx++) {
-    for (let childidx = 0; childidx < all.length; childidx++) {
-      if (GRAPHMATRIX[childidx][parentidx]) { addEdgeQuiz(graph, all[parentidx], all[childidx]); }
+  for (let parentidx = 0; parentidx < nodes.length; parentidx++) {
+    for (let childidx = 0; childidx < nodes.length; childidx++) {
+      if (matrix[childidx][parentidx]) {
+        if (nodes[parentidx] && nodes[childidx]) {
+          // console.log({par: (nodes[parentidx] as any).uniqueId, chil: (nodes[childidx] as any).uniqueId});
+        }
+        addEdgeQuiz(graph, nodes[parentidx], nodes[childidx]);
+      }
     }
   }
 }
@@ -216,7 +217,8 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
     if (!prompt) { throw new Error('no prompt? ' + JSON.stringify(headerFields)); }
     if (responses.length === 0) { responses.push(prompt); }
     const {PASSIVE, SEEPROMPT, SEERESPONSE} = promptResponsesToCards(prompt, responses);
-    const cards: QuizCard[] = [PASSIVE, SEEPROMPT, SEERESPONSE].filter(x => !!x) as QuizCard[];
+    const allCards = [PASSIVE, SEEPROMPT, SEERESPONSE];
+    const cards: QuizCard[] = allCards.filter(x => !!x) as QuizCard[];
     cards.forEach(card => addNodeWithRaw(graph, block[0], card));
 
     const acceptableContiguousRegexps = [translationRe, furiganaRe, fillRe, flashRe, unknownRe];
@@ -239,7 +241,8 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
 
     if (furigana) { cards.forEach(node => node.lede = furigana); }
     if (translation) { cards.forEach(node => node.translation = translation); }
-    link(graph, cards, [], []); // might not get the opportunity to later
+    // might not get the opportunity to link these later
+    link(graph, SENTENCEMAT, allCards.concat(Array(6).fill(undefined)));
 
     const fills = bullets.filter(line => fillRe.test(line)).map(line => {
       const match = line.match(fillRe);
@@ -269,7 +272,8 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
       const {PASSIVE: subPassive, SEEPROMPT: subPrompt, SEERESPONSE: subResponse} =
           promptResponsesToCards(prompt2, resp2);
 
-      const topFlashs = [subPassive, subPrompt, subResponse].filter(x => !!x) as QuizCard[];
+      const allFlashs = [subPassive, subPrompt, subResponse];
+      const topFlashs = allFlashs.filter(x => !!x) as QuizCard[];
 
       // if this flashcard has a part of speech or furigana
       if ('@furigana' in flash.adverbs) {
@@ -286,7 +290,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
             addNodeWithRaw(graph, block[0], card); // merge pos
           });
         }
-        return;
+        return [];
       }
 
       // if local translation available
@@ -334,16 +338,43 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
         }
       }
 
-      const clozes = [clozeSeeNothing, clozeSeePrompt, clozeSeeResponse];
-      clozes.forEach(cloze => {
+      const allClozes = [clozeSeeNothing, clozeSeePrompt, clozeSeeResponse];
+      allClozes.forEach(cloze => {
         if (cloze) {
           addNodeWithRaw(graph, block[0] + '\n' + line, cloze);
           if (translation) { cloze.translation = translation; }
           if (furigana) { cloze.lede = furigana; }
         }
       });
-      link(graph, cards, topFlashs, clozes);
+      link(graph, SENTENCEMAT, (cards as (Quiz | undefined)[]).concat(topFlashs).concat(allClozes));
+      return [allFlashs, allClozes];
     });
+
+    // all sub-bullets parsed. Now make matching
+    {
+      const pairs = [] as MatchPiece[];
+      for (const [[passive, ..._], __] of flashs.filter(v => v.length)) {
+        if (passive && passive.kind === QuizKind.Card && passive.lede && passive.translation) {
+          pairs.push({text: passive.lede, translation: passive.translation})
+        }
+      }
+      if (pairs.length) {
+        const kind = QuizKind.Match;
+        const translation = PASSIVE.translation;
+        const lede = PASSIVE.lede;
+        const uniqueId = JSON.stringify({lede, pairs});
+        const match: QuizMatch = {uniqueId, kind, translation, lede, pairs};
+        addNodeWithRaw(graph, block[0], match);
+
+        // reviewing any of the top cards (promt<->resp) is a passive review for this match card
+        // reviewing the match is passive review for the top-level passive/show-prompt
+        //
+        for (const [[a, b, c], [ap, bp, cp]] of flashs) {
+          const ten = [cards[0], cards[1], cards[2], a, b, c, ap, bp, cp, match];
+          link(graph, MATCHMAT, ten);
+        }
+      }
+    }
   }
 }
 
