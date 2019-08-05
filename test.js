@@ -186,5 +186,8 @@ test('match quiz', t => {
   let parents = Array.from(graph.edges.values()).filter(set => set.has(matches[0].uniqueId));
   t.equal(parents.length, 3 + 3 * 3, 'match has right # of parents');
 
+  t.equal(matches[0].pairs.length, 3);
+  t.equal(matches[1].pairs.length, 2);
+
   t.end();
 });

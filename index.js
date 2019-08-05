@@ -139,9 +139,6 @@ function link(graph, matrix, nodes) {
     for (let parentidx = 0; parentidx < nodes.length; parentidx++) {
         for (let childidx = 0; childidx < nodes.length; childidx++) {
             if (matrix[childidx][parentidx]) {
-                if (nodes[parentidx] && nodes[childidx]) {
-                    // console.log({par: (nodes[parentidx] as any).uniqueId, chil: (nodes[childidx] as any).uniqueId});
-                }
                 addEdgeQuiz(graph, nodes[parentidx], nodes[childidx]);
             }
         }
