@@ -189,5 +189,10 @@ test('match quiz', t => {
   t.equal(matches[0].pairs.length, 3);
   t.equal(matches[1].pairs.length, 2);
 
+  t.equal(Array.from(graph.raws.get("## @ 千尋のお父さん @ ちひろのおちちさん @t-en Chihiro's father"))
+              .filter(q => graph.nodes.get(q).kind === curtiz.QuizKind.Match)
+              .length,
+          1);
+
   t.end();
 });
