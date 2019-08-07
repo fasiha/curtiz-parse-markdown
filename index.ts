@@ -11,6 +11,7 @@ export enum QuizKind {
 interface QuizBase {
   uniqueId: string;
   kind: QuizKind;
+  writing: boolean;
   translation?: {[lang: string]: string};
   lede?: Furigana[];
 }
@@ -51,7 +52,6 @@ export interface QuizCard extends QuizBase {
   responses: string[];
   kind: QuizKind.Card;
   passive: boolean;
-  inverted: boolean;
   pos?: string[];
 }
 
@@ -117,14 +117,14 @@ export function _separateAtSeparateds(s: string, n: number = 0): AtLine {
   }));
   return {atSeparatedValues, adverbs};
 }
-export function makeCard(prompt: string, responses: string[], passive: boolean, inverted: boolean): QuizCard {
+export function makeCard(prompt: string, responses: string[], passive: boolean, writing: boolean): QuizCard {
   return {
     prompt,
     responses,
     uniqueId: JSON.stringify({prompt, responses, passive}),
     kind: QuizKind.Card,
     passive,
-    inverted
+    writing,
   };
 }
 
@@ -319,7 +319,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
             clozeSeePrompt = addIdToCloze(node);
           }
           {
-            let node = parseCloze(prompt, blank);
+            let node = parseCloze(prompt, blank, true);
             node.prompts = [resp2.join(RESPONSE_SEP)];
             node.clozes[0] = [prompt2];
             clozeSeeResponse = addIdToCloze(node);
@@ -358,7 +358,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
         const translation = PASSIVE.translation;
         const lede = PASSIVE.lede;
         const uniqueId = JSON.stringify({lede, pairs});
-        const match: QuizMatch = {uniqueId, kind, translation, lede, pairs};
+        const match: QuizMatch = {uniqueId, kind, translation, lede, pairs, writing: false};
         addNodeWithRaw(graph, block[0], match);
 
         // reviewing any of the top cards (promt<->resp) is a passive review for this match card
@@ -395,7 +395,7 @@ export function textToGraph(text: string, graph?: QuizGraph) {
  * @param haystack Long string
  * @param needleMaybeContext
  */
-function parseCloze(haystack: string, needleMaybeContext: string): ClozeOptionalId {
+function parseCloze(haystack: string, needleMaybeContext: string, writing: boolean = false): ClozeOptionalId {
   let re = /\[([^\]]+)\]/;
   let bracketMatch = needleMaybeContext.match(re);
   if (bracketMatch) {
@@ -411,7 +411,7 @@ function parseCloze(haystack: string, needleMaybeContext: string): ClozeOptional
     const left = haystack.slice(0, checkContext.index + leftContext.length);
     const right = haystack.slice(checkContext.index + checkContext[0].length - rightContext.length);
     if (fullRe.exec(haystack)) { throw new Error('Insufficient cloze context'); }
-    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze};
+    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze, writing};
   }
   let cloze = needleMaybeContext;
   let clozeRe = new RegExp(cloze, 'g');
@@ -420,7 +420,7 @@ function parseCloze(haystack: string, needleMaybeContext: string): ClozeOptional
     let left = haystack.slice(0, clozeHit.index);
     let right = haystack.slice(clozeHit.index + cloze.length);
     if (clozeRe.exec(haystack)) { throw new Error('Cloze context required'); }
-    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze};
+    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze, writing};
   }
   throw new Error('Cloze not found');
 }

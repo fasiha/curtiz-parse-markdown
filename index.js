@@ -72,14 +72,14 @@ function _separateAtSeparateds(s, n = 0) {
     return { atSeparatedValues, adverbs };
 }
 exports._separateAtSeparateds = _separateAtSeparateds;
-function makeCard(prompt, responses, passive, inverted) {
+function makeCard(prompt, responses, passive, writing) {
     return {
         prompt,
         responses,
         uniqueId: JSON.stringify({ prompt, responses, passive }),
         kind: QuizKind.Card,
         passive,
-        inverted
+        writing,
     };
 }
 exports.makeCard = makeCard;
@@ -276,7 +276,7 @@ function updateGraphWithBlock(graph, block) {
                         clozeSeePrompt = addIdToCloze(node);
                     }
                     {
-                        let node = parseCloze(prompt, blank);
+                        let node = parseCloze(prompt, blank, true);
                         node.prompts = [resp2.join(RESPONSE_SEP)];
                         node.clozes[0] = [prompt2];
                         clozeSeeResponse = addIdToCloze(node);
@@ -318,7 +318,7 @@ function updateGraphWithBlock(graph, block) {
                 const translation = PASSIVE.translation;
                 const lede = PASSIVE.lede;
                 const uniqueId = JSON.stringify({ lede, pairs });
-                const match = { uniqueId, kind, translation, lede, pairs };
+                const match = { uniqueId, kind, translation, lede, pairs, writing: false };
                 addNodeWithRaw(graph, block[0], match);
                 // reviewing any of the top cards (promt<->resp) is a passive review for this match card
                 // reviewing the match is passive review for the top-level passive/show-prompt
@@ -354,7 +354,7 @@ exports.textToGraph = textToGraph;
  * @param haystack Long string
  * @param needleMaybeContext
  */
-function parseCloze(haystack, needleMaybeContext) {
+function parseCloze(haystack, needleMaybeContext, writing = false) {
     let re = /\[([^\]]+)\]/;
     let bracketMatch = needleMaybeContext.match(re);
     if (bracketMatch) {
@@ -377,7 +377,7 @@ function parseCloze(haystack, needleMaybeContext) {
         if (fullRe.exec(haystack)) {
             throw new Error('Insufficient cloze context');
         }
-        return { contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze };
+        return { contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze, writing };
     }
     let cloze = needleMaybeContext;
     let clozeRe = new RegExp(cloze, 'g');
@@ -388,7 +388,7 @@ function parseCloze(haystack, needleMaybeContext) {
         if (clozeRe.exec(haystack)) {
             throw new Error('Cloze context required');
         }
-        return { contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze };
+        return { contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze, writing };
     }
     throw new Error('Cloze not found');
 }
