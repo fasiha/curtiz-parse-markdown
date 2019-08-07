@@ -11,7 +11,6 @@ export enum QuizKind {
 interface QuizBase {
   uniqueId: string;
   kind: QuizKind;
-  writing: boolean;
   translation?: {[lang: string]: string};
   lede?: Furigana[];
 }
@@ -39,22 +38,29 @@ export interface QuizCloze extends QuizBase {
   contexts: (string|null)[];
   clozes: string[][];
   kind: QuizKind.Cloze;
+  subkind: ClozeSubKind;
   prompts?: string[];
 }
+export type ClozeSubKind = 'regular'|'noHint'|'promptHint'|'responsesHint';
 type ClozeOptionalId = Omit<QuizCloze, 'uniqueId'>&{uniqueId?: string};
 function addIdToCloze(cloze: ClozeOptionalId): QuizCloze {
   cloze.uniqueId = JSON.stringify({contexts: cloze.contexts, clozes: cloze.clozes, prompts: cloze.prompts});
   return cloze as QuizCloze;
 }
 
+/**
+ * More like a flashcard: one `prompt`, multiple valid `responses`
+ */
 export interface QuizCard extends QuizBase {
   prompt: string;
   responses: string[];
   kind: QuizKind.Card;
-  passive: boolean;
+  subkind: CardSubKind;
   pos?: string[];
 }
+export type CardSubKind = 'passive'|'seePrompt'|'seeResponses';
 
+// All quiz types
 export type Quiz = QuizCloze|QuizCard|QuizMatch;
 
 interface Graph<T> {
@@ -117,14 +123,12 @@ export function _separateAtSeparateds(s: string, n: number = 0): AtLine {
   }));
   return {atSeparatedValues, adverbs};
 }
-export function makeCard(prompt: string, responses: string[], passive: boolean, writing: boolean): QuizCard {
+type ExactOmit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
+export function makeCard(init: ExactOmit<QuizCard, 'uniqueId'|'kind'>): QuizCard {
   return {
-    prompt,
-    responses,
-    uniqueId: JSON.stringify({prompt, responses, passive}),
-    kind: QuizKind.Card,
-    passive,
-    writing,
+    ...init,
+    uniqueId: JSON.stringify({prompt: init.prompt, responses: init.responses, subkind: init.subkind}),
+    kind: QuizKind.Card
   };
 }
 
@@ -143,12 +147,12 @@ const RESPONSE_SEP = '・'
 function promptResponsesToCards(prompt: string, responses: string[]) {
   const passiveconstant = true;
   const invertedconstant = true;
-  const PASSIVE = makeCard(prompt, responses, passiveconstant, !invertedconstant);
+  const PASSIVE = makeCard({prompt, responses, subkind: 'passive'});
   let SEEPROMPT: QuizCard|undefined;
   let SEERESPONSE: QuizCard|undefined;
   if ((responses.length > 1 || responses[0] !== prompt)) {
-    SEEPROMPT = makeCard(prompt, responses, !passiveconstant, !invertedconstant);
-    SEERESPONSE = makeCard(responses.join(RESPONSE_SEP), [prompt], !passiveconstant, invertedconstant);
+    SEEPROMPT = makeCard({prompt, responses, subkind: 'seePrompt'});
+    SEERESPONSE = makeCard({prompt: responses.join(RESPONSE_SEP), responses: [prompt], subkind: 'seeResponses'});
   }
 
   return {PASSIVE, SEEPROMPT, SEERESPONSE};
@@ -243,7 +247,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
       const match = line.match(fillRe);
       if (!match) { throw new Error('typescript pacification FILL: ' + line); }
       const fill = _separateAtSeparateds(line, match[0].length);
-      const cloze = parseCloze(prompt, fill.atSeparatedValues[0]);
+      const cloze = parseCloze(prompt, fill.atSeparatedValues[0], 'regular');
       // add other valid entries
       cloze.clozes[0].push(...fill.atSeparatedValues.slice(1));
       // complete the graph node
@@ -305,13 +309,13 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
         if (subPassive && subPrompt && subResponse) {
           // if I can make A', B', C'
           {
-            const node = parseCloze(prompt, blank);
+            const node = parseCloze(prompt, blank, 'noHint');
             // no prompts, can answer with either prompt or response
             node.clozes[0] = resp2.concat(prompt2);
             clozeSeeNothing = addIdToCloze(node);
           }
           {
-            let node = parseCloze(prompt, blank);
+            let node = parseCloze(prompt, blank, 'promptHint');
             // show cloze hint as the prompt
             node.prompts = [prompt2];
             // require answer to be responses (or prompt since IME)
@@ -319,14 +323,14 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
             clozeSeePrompt = addIdToCloze(node);
           }
           {
-            let node = parseCloze(prompt, blank, true);
+            let node = parseCloze(prompt, blank, 'responsesHint');
             node.prompts = [resp2.join(RESPONSE_SEP)];
             node.clozes[0] = [prompt2];
             clozeSeeResponse = addIdToCloze(node);
           }
         } else {
           // Can only make A'
-          let node = parseCloze(prompt, blank);
+          let node = parseCloze(prompt, blank, 'noHint');
           // no prompts, can answer with either prompt or response
           node.clozes[0] = resp2.concat(prompt2);
           clozeSeeNothing = addIdToCloze(node);
@@ -358,7 +362,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
         const translation = PASSIVE.translation;
         const lede = PASSIVE.lede;
         const uniqueId = JSON.stringify({lede, pairs});
-        const match: QuizMatch = {uniqueId, kind, translation, lede, pairs, writing: false};
+        const match: QuizMatch = {uniqueId, kind, translation, lede, pairs};
         addNodeWithRaw(graph, block[0], match);
 
         // reviewing any of the top cards (promt<->resp) is a passive review for this match card
@@ -395,7 +399,7 @@ export function textToGraph(text: string, graph?: QuizGraph) {
  * @param haystack Long string
  * @param needleMaybeContext
  */
-function parseCloze(haystack: string, needleMaybeContext: string, writing: boolean = false): ClozeOptionalId {
+function parseCloze(haystack: string, needleMaybeContext: string, subkind: ClozeSubKind): ClozeOptionalId {
   let re = /\[([^\]]+)\]/;
   let bracketMatch = needleMaybeContext.match(re);
   if (bracketMatch) {
@@ -411,7 +415,7 @@ function parseCloze(haystack: string, needleMaybeContext: string, writing: boole
     const left = haystack.slice(0, checkContext.index + leftContext.length);
     const right = haystack.slice(checkContext.index + checkContext[0].length - rightContext.length);
     if (fullRe.exec(haystack)) { throw new Error('Insufficient cloze context'); }
-    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze, writing};
+    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze, subkind};
   }
   let cloze = needleMaybeContext;
   let clozeRe = new RegExp(cloze, 'g');
@@ -420,7 +424,7 @@ function parseCloze(haystack: string, needleMaybeContext: string, writing: boole
     let left = haystack.slice(0, clozeHit.index);
     let right = haystack.slice(clozeHit.index + cloze.length);
     if (clozeRe.exec(haystack)) { throw new Error('Cloze context required'); }
-    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze, writing};
+    return {contexts: [left, null, right], clozes: [[cloze]], kind: QuizKind.Cloze, subkind};
   }
   throw new Error('Cloze not found');
 }
