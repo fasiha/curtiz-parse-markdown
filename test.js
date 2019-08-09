@@ -111,7 +111,8 @@ test('second example', t => {
   const fills = nodes.filter(q => q.kind === 'cloze' && !q.prompts);
   t.equal(fills.length, 2 + 4, '1 clozes/particle + 1 cloze/vocab without prompt');
   const conjfill = fills.filter(q => q.clozes[0].length === 2);
-  t.equal(conjfill.length, 1 + 4, 'kanji and kana are both clozes')
+  t.equal(conjfill.length, 1 + 4 - 2, 'kanji and kana are both clozes')
+  // not two because can't disambiguate 人々 without furigana, and even with can't handle 出る
 
   t.end();
 });
@@ -194,5 +195,61 @@ test('match quiz', t => {
               .length,
           1);
 
+  t.end();
+});
+
+test('make sure aprime is sensible', t => {
+  const s = `## @ 千尋のお父さん @ ちひろのおちちさん @t-en Chihiro's father
+- @furigana {千}^{ち}{尋}^{ひろ}のお{父}^{ちち}さん
+- @ 父 @ ちち    @pos noun-common-general @furigana {父}^{ちち} @t-en father @omit お[父]さ
+- @ さん @ さん @-en san
+`;
+  const graph = curtiz.textToGraph(s);
+  const nodes = [...graph.nodes.values()];
+  const noHint = nodes.filter(o => o.subkind === 'noHint');
+  t.equal(noHint.length, 2);
+  {
+    const chichi = new Set(noHint[0].clozes[0]);
+    t.equal(chichi.size, 2);
+    t.ok(chichi.has('ちち') && chichi.has('父'));
+  }
+  {
+    const san = new Set(noHint[1].clozes[0]);
+    t.equal(san.size, 1);
+    t.ok(san.has('さん'));
+  }
+  // p(nodes.filter(o => o.subkind === 'noHint').map(o => ((o.clozes[0]))));
+  t.end();
+});
+
+test('another aprime test from above', t => {
+  const s = `## @ このおはなしに出て来る人びと @ このおはなしにでてくるひとびと
+- @furigana このおはなしに{出}^{で}て{来}^{く}る{人}^{ひと}びと
+- @fill に    @pos particle-case
+- @fill 出て来る @ でてくる    @pos verb-general/particle-conjunctive/verb-bound
+- @ 話 @ はなし    @pos noun-common-verbal_suru @omit はなし @furigana {話}^{はなし}
+- @ 出る @ でる    @pos verb-general @omit 出 @furigana {出}^{で}る
+- @ 来る @ くる    @pos verb-bound @furigana {来}^{く}る
+- @ 人々 @ ひとびと    @pos noun-common-general @omit 人びと @furigana {人}^{ひと}{々}^{びと}`;
+  const graph = curtiz.textToGraph(s);
+  const nodes = [...graph.nodes.values()];
+  const noHint = nodes.filter(o => o.subkind === 'noHint');
+  // p(noHint.map(o => o.clozes));
+  for (let i = 0; i < 4; i++) {
+    const c = noHint[i].clozes[0];
+    if (i === 0) {
+      t.equal(c.length, 2);
+      t.ok(c.includes('話') && c.includes('はなし'));
+    } else if (i === 1) {
+      t.equal(c.length, 2);
+      t.ok(c.includes('出') && c.includes('で'));
+    } else if (i === 2) {
+      t.equal(c.length, 2);
+      t.ok(c.includes('来る') && c.includes('くる'));
+    } else {
+      t.equal(c.length, 3);
+      t.ok(c.includes('人びと') && c.includes('ひとびと') && c.includes('人々'));
+    }
+  }
   t.end();
 });

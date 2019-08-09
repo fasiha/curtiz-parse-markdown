@@ -187,6 +187,17 @@ function updateGraphWithBlock(graph, block) {
         }
         // might not get the opportunity to link these later
         link(graph, SENTENCEMAT, allCards.concat(Array(6).fill(undefined)));
+        const furiganaLookup = [];
+        if (furigana) {
+            for (const f of furigana) {
+                if (typeof f === 'string') {
+                    furiganaLookup.push(...f.split(''));
+                }
+                else {
+                    furiganaLookup.push(f.rt);
+                }
+            }
+        }
         const fills = bullets.filter(line => fillRe.test(line)).map(line => {
             const match = line.match(fillRe);
             if (!match) {
@@ -218,6 +229,7 @@ function updateGraphWithBlock(graph, block) {
             }
             const flash = _separateAtSeparateds(line, match[0].length);
             const [prompt2, ...resp2] = flash.atSeparatedValues;
+            // These will be morphemes lemma/readings
             const { PASSIVE: subPassive, SEEPROMPT: subPrompt, SEERESPONSE: subResponse } = promptResponsesToCards(prompt2, resp2);
             const allFlashs = [subPassive, subPrompt, subResponse];
             const topFlashs = allFlashs.filter(x => !!x);
@@ -252,12 +264,24 @@ function updateGraphWithBlock(graph, block) {
             let clozeSeeResponse;
             if ('@omit' in flash.adverbs || prompt.includes(prompt2)) {
                 const blank = flash.adverbs['@omit'] || prompt2;
+                // other acceptable alternatives to blank
+                const alsoOk = [];
+                if (furigana) {
+                    const start = prompt.indexOf(blank);
+                    if (start >= 0) {
+                        const reading = Array.from(Array(blank.length), (_, i) => furiganaLookup[i + start]).join('');
+                        alsoOk.push(reading);
+                    }
+                }
                 if (subPassive && subPrompt && subResponse) {
                     // if I can make A', B', C'
                     {
                         const node = parseCloze(prompt, blank, 'noHint');
                         // no prompts, can answer with either prompt or response
-                        node.clozes[0] = resp2.concat(prompt2);
+                        if (node.clozes[0][0] === prompt2 || resp2.includes(node.clozes[0][0]) || resp2.includes(alsoOk[0])) {
+                            alsoOk.push(...resp2.concat(prompt2));
+                        }
+                        node.clozes[0] = unique(node.clozes[0].concat(alsoOk));
                         clozeSeeNothing = addIdToCloze(node);
                     }
                     {
@@ -279,7 +303,10 @@ function updateGraphWithBlock(graph, block) {
                     // Can only make A'
                     let node = parseCloze(prompt, blank, 'noHint');
                     // no prompts, can answer with either prompt or response
-                    node.clozes[0] = resp2.concat(prompt2);
+                    if (node.clozes[0][0] === prompt2 || resp2.includes(node.clozes[0][0]) || resp2.includes(alsoOk[0])) {
+                        alsoOk.push(...resp2.concat(prompt2));
+                    }
+                    node.clozes[0] = unique(node.clozes[0].concat(alsoOk));
                     clozeSeeNothing = addIdToCloze(node);
                 }
             }
@@ -295,7 +322,7 @@ function updateGraphWithBlock(graph, block) {
                     }
                 }
             });
-            link(graph, SENTENCEMAT, cards.concat(topFlashs).concat(allClozes));
+            link(graph, SENTENCEMAT, allCards.concat(allFlashs).concat(allClozes));
             return [allFlashs, allClozes];
         });
         // all sub-bullets parsed. Now make matching
@@ -385,6 +412,7 @@ function parseCloze(haystack, needleMaybeContext, subkind) {
     }
     throw new Error('Cloze not found');
 }
+function unique(arr) { return Array.from(new Set(arr)); }
 if (module === require.main) {
     let s = `# @ 私 @ わたし @ わたくし @ あたし @t-en I @t-fr je @t-de Ich`;
     let graph = textToGraph(s);

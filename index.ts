@@ -236,12 +236,22 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
       const match = line.match(furiganaRe);
       if (!match) { throw new Error('typescript pacification FURIGANA: ' + line); }
       return stringToFurigana(line.slice(match[0].length))
-    })[0];
-
+    })[0] as Furigana[] | undefined;
     if (furigana) { cards.forEach(node => node.lede = furigana); }
     if (translation) { cards.forEach(node => node.translation = translation); }
     // might not get the opportunity to link these later
     link(graph, SENTENCEMAT, allCards.concat(Array(6).fill(undefined)));
+
+    const furiganaLookup: string[] = [];
+    if (furigana) {
+      for (const f of furigana) {
+        if (typeof f === 'string') {
+          furiganaLookup.push(...f.split(''));
+        } else {
+          furiganaLookup.push(f.rt);
+        }
+      }
+    }
 
     const fills = bullets.filter(line => fillRe.test(line)).map(line => {
       const match = line.match(fillRe);
@@ -268,6 +278,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
 
       const flash = _separateAtSeparateds(line, match[0].length);
       const [prompt2, ...resp2] = flash.atSeparatedValues;
+      // These will be morphemes lemma/readings
       const {PASSIVE: subPassive, SEEPROMPT: subPrompt, SEERESPONSE: subResponse} =
           promptResponsesToCards(prompt2, resp2);
 
@@ -305,13 +316,25 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
       let clozeSeeResponse: QuizCloze|undefined;
       if ('@omit' in flash.adverbs || prompt.includes(prompt2)) {
         const blank = flash.adverbs['@omit'] || prompt2;
+        // other acceptable alternatives to blank
+        const alsoOk: string[] = [];
+        if (furigana) {
+          const start = prompt.indexOf(blank);
+          if (start >= 0) {
+            const reading = Array.from(Array(blank.length), (_, i) => furiganaLookup[i + start]).join('')
+            alsoOk.push(reading);
+          }
+        }
 
         if (subPassive && subPrompt && subResponse) {
           // if I can make A', B', C'
           {
             const node = parseCloze(prompt, blank, 'noHint');
             // no prompts, can answer with either prompt or response
-            node.clozes[0] = resp2.concat(prompt2);
+            if (node.clozes[0][0] === prompt2 || resp2.includes(node.clozes[0][0]) || resp2.includes(alsoOk[0])) {
+              alsoOk.push(...resp2.concat(prompt2));
+            }
+            node.clozes[0] = unique(node.clozes[0].concat(alsoOk));
             clozeSeeNothing = addIdToCloze(node);
           }
           {
@@ -332,7 +355,10 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
           // Can only make A'
           let node = parseCloze(prompt, blank, 'noHint');
           // no prompts, can answer with either prompt or response
-          node.clozes[0] = resp2.concat(prompt2);
+          if (node.clozes[0][0] === prompt2 || resp2.includes(node.clozes[0][0]) || resp2.includes(alsoOk[0])) {
+            alsoOk.push(...resp2.concat(prompt2));
+          }
+          node.clozes[0] = unique(node.clozes[0].concat(alsoOk));
           clozeSeeNothing = addIdToCloze(node);
         }
       }
@@ -345,7 +371,7 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
           if (furigana) { cloze.lede = furigana; }
         }
       });
-      link(graph, SENTENCEMAT, (cards as (Quiz | undefined)[]).concat(topFlashs).concat(allClozes));
+      link(graph, SENTENCEMAT, (allCards as (Quiz | undefined)[]).concat(allFlashs).concat(allClozes));
       return [allFlashs, allClozes];
     });
 
@@ -428,6 +454,8 @@ function parseCloze(haystack: string, needleMaybeContext: string, subkind: Cloze
   }
   throw new Error('Cloze not found');
 }
+
+function unique<T>(arr: T[]): T[] { return Array.from(new Set(arr)); }
 
 if (module === require.main) {
   let s = `# @ 私 @ わたし @ わたくし @ あたし @t-en I @t-fr je @t-de Ich`;
