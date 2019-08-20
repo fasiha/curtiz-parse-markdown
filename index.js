@@ -229,8 +229,8 @@ function updateGraphWithBlock(graph, block) {
             const [prompt2, ...resp2] = flash.atSeparatedValues;
             // These will be morphemes lemma/readings
             const { PASSIVE: subPassive, SEEPROMPT: subPrompt, SEERESPONSE: subResponse } = promptResponsesToCards(prompt2, resp2);
-            const allFlashs = [subPassive, subPrompt, subResponse];
-            const topFlashs = allFlashs.filter(x => !!x);
+            let allFlashs = [subPassive, subPrompt, subResponse];
+            let topFlashs = allFlashs.filter(x => !!x);
             // if this flashcard has a part of speech or furigana
             if ('@furigana' in flash.adverbs) {
                 const lede = jmdict_furigana_node_1.stringToFurigana(flash.adverbs['@furigana']);
@@ -256,6 +256,10 @@ function updateGraphWithBlock(graph, block) {
             }
             // Now enroll these top-level-equivalent flashcards into the graph
             topFlashs.forEach(card => addNodeWithRaw(graph, block[0] + '\n' + line, card));
+            // We delay copying the cards from the node because the above function will merge furigana/translation with any
+            // previous card with same uniquID
+            topFlashs = topFlashs.map(o => (graph.nodes.get(o.uniqueId) || o));
+            allFlashs = allFlashs.map(o => (o ? graph.nodes.get(o.uniqueId) || o : o));
             // Can I make fill-in-the-blank quizzes out of this flashcard?
             let clozeSeeNothing;
             let clozeSeePrompt;

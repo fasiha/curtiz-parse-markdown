@@ -102,6 +102,28 @@ test('small example', t => {
   t.end();
 });
 
+test('matching available with prefix-vocab style', t => {
+  const s = `## @ 千 @ せん @t-en Sen
+- @furigana {千}^{せん}
+## @ 千尋 @ ちひろ @t-en Chihiro
+- @furigana {千}^{ち}{尋}^{ひろ}
+## @ 神隠し @ かみがくし
+- @furigana {神}^{かみ}{隠}^{がく}し
+## @ 千と千尋の神隠し @ せんとちひろのかみがくし
+- @furigana {千}^{せん}と{千}^{ち}{尋}^{ひろ}の{神}^{かみ}{隠}^{がく}し
+- @fill と    @pos particle-case
+- @fill の    @pos particle-case
+- @ 千 @ せん @omit [千]と
+- @ 千尋 @ ちひろ
+- @ 神隠し @ かみがくし
+- @translation @en Spirited Away (film)
+`;
+  const graph = curtiz.textToGraph(s);
+  const nodes = [...graph.nodes.values()];
+  t.ok((new Set(nodes.map(o => o.kind))).has('match'));
+  t.end();
+});
+
 test('second example', t => {
   const s = `## @ このおはなしに出て来る人びと @ このおはなしにでてくるひとびと
 - @fill に

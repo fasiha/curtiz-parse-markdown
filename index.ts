@@ -280,8 +280,8 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
       const {PASSIVE: subPassive, SEEPROMPT: subPrompt, SEERESPONSE: subResponse} =
           promptResponsesToCards(prompt2, resp2);
 
-      const allFlashs = [subPassive, subPrompt, subResponse];
-      const topFlashs = allFlashs.filter(x => !!x) as QuizCard[];
+      let allFlashs = [subPassive, subPrompt, subResponse];
+      let topFlashs = allFlashs.filter(x => !!x) as QuizCard[];
 
       // if this flashcard has a part of speech or furigana
       if ('@furigana' in flash.adverbs) {
@@ -307,6 +307,10 @@ export function updateGraphWithBlock(graph: QuizGraph, block: string[]) {
 
       // Now enroll these top-level-equivalent flashcards into the graph
       topFlashs.forEach(card => addNodeWithRaw(graph, block[0] + '\n' + line, card));
+      // We delay copying the cards from the node because the above function will merge furigana/translation with any
+      // previous card with same uniquID
+      topFlashs = topFlashs.map(o => (graph.nodes.get(o.uniqueId) || o) as QuizCard);
+      allFlashs = allFlashs.map(o => (o ? graph.nodes.get(o.uniqueId) || o : o) as QuizCard | undefined);
 
       // Can I make fill-in-the-blank quizzes out of this flashcard?
       let clozeSeeNothing: QuizCloze|undefined;
