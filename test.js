@@ -55,17 +55,22 @@ test('translation single-line', t => {
 });
 
 test('small example', t => {
-  const s = `## @ 千と千尋の神隠し @ せんとちひろのかみがくし
-- @furigana {千}^{せん}と{千}^{ち}{尋}^{ひろ}の{神}^{かみ}{隠}^{かく}し
+  const s = `## @ 千 @ せん
+- @furigana {千}^{せん}
+## @ 千尋 @ ちひろ
+- @furigana {千}^{ち}{尋}^{ひろ}
+## @ 神隠し @ かみがくし
+- @furigana {神}^{かみ}{隠}^{がく}し
+## @ 千と千尋の神隠し @ せんとちひろのかみがくし
+- @furigana {千}^{せん}と{千}^{ち}{尋}^{ひろ}の{神}^{かみ}{隠}^{がく}し
 - @fill と    @pos particle-case
 - @fill の    @pos particle-case
-- @ 千 @ せん    @pos noun-proper-name-firstname @omit [千]と @furigana {千}^{せん}
-- @ 千尋 @ ちひろ    @pos noun-proper-name-firstname @furigana {千}^{ち}{尋}^{ひろ}
-- @ 神隠し @ かみがくし    @pos noun-common-general @furigana {神}^{かみ}{隠}^{かく}し
+- @ 千 @ せん @omit [千]と
+- @ 千尋 @ ちひろ
+- @ 神隠し @ かみがくし
 - @translation @en Spirited Away (film)
 `;
   const graph = curtiz.textToGraph(s);
-  // p(graph);
   t.equal(3 + 2 + 3 * 6, graph.nodes.size); // 3 cards top-level, 1 cloze/fill, and 6/flash (3 card and 3 cloze)
 
   const nodes = [...graph.nodes.values()];

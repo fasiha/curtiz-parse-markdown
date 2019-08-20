@@ -145,8 +145,6 @@ function extractShortTranslation(adverbs: Dict): Dict|undefined {
 
 const RESPONSE_SEP = '・'
 function promptResponsesToCards(prompt: string, responses: string[]) {
-  const passiveconstant = true;
-  const invertedconstant = true;
   const PASSIVE = makeCard({prompt, responses, subkind: 'passive'});
   let SEEPROMPT: QuizCard|undefined;
   let SEERESPONSE: QuizCard|undefined;
@@ -456,9 +454,3 @@ function parseCloze(haystack: string, needleMaybeContext: string, subkind: Cloze
 }
 
 function unique<T>(arr: T[]): T[] { return Array.from(new Set(arr)); }
-
-if (module === require.main) {
-  let s = `# @ 私 @ わたし @ わたくし @ あたし @t-en I @t-fr je @t-de Ich`;
-  let graph = textToGraph(s);
-  console.dir(graph, {depth: null});
-}

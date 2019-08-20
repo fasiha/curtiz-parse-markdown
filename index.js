@@ -88,8 +88,6 @@ function extractShortTranslation(adverbs) {
 }
 const RESPONSE_SEP = '・';
 function promptResponsesToCards(prompt, responses) {
-    const passiveconstant = true;
-    const invertedconstant = true;
     const PASSIVE = makeCard({ prompt, responses, subkind: 'passive' });
     let SEEPROMPT;
     let SEERESPONSE;
@@ -413,9 +411,4 @@ function parseCloze(haystack, needleMaybeContext, subkind) {
     throw new Error('Cloze not found');
 }
 function unique(arr) { return Array.from(new Set(arr)); }
-if (module === require.main) {
-    let s = `# @ 私 @ わたし @ わたくし @ あたし @t-en I @t-fr je @t-de Ich`;
-    let graph = textToGraph(s);
-    console.dir(graph, { depth: null });
-}
 //# sourceMappingURL=index.js.map
